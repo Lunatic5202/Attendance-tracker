@@ -309,28 +309,28 @@ Reject    Recognize
 ### Phase 1 — Core System
 
 * [x] Project setup
-* [ ] Webcam integration
-* [ ] Face detection
-* [ ] Employee registration
-* [ ] Face recognition
-* [ ] Automatic check-in
-* [ ] Automatic check-out
+* [x] Webcam integration
+* [x] Face detection
+* [x] Employee registration
+* [x] Face recognition
+* [x] Automatic check-in
+* [x] Automatic check-out
 
 ### Phase 2 — Attendance Management
 
-* [ ] SQLite database
-* [ ] Attendance history
-* [ ] Working-hours calculation
-* [ ] Duplicate scan prevention
-* [ ] Employee management
+* [x] SQLite database
+* [x] Attendance history
+* [x] Working-hours calculation
+* [x] Duplicate scan prevention
+* [x] Employee management
 
 ### Phase 3 — Dashboard
 
-* [ ] React dashboard
-* [ ] Daily attendance view
-* [ ] Employee search
-* [ ] Attendance filters
-* [ ] Reports/export
+* [x] React dashboard
+* [x] Daily attendance view
+* [x] Employee search
+* [x] Attendance filters
+* [x] Reports/export
 
 ### Phase 4 — Security
 
