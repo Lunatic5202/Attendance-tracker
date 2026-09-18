@@ -90,7 +90,7 @@ def verify_session(token: str | None) -> bool:
 
 def public_employee(row: Any) -> dict:
     data = dict(row)
-    for field in ("name", "department", "role", "email", "phone"):
+    for field in ("name", "department", "role", "email", "phone", "created_at"):
         data[field] = decrypt_text(data.get(field)) or ""
     data["is_active"] = bool(data.get("is_active"))
     data["face_enrolled"] = bool(data.get("face_available"))

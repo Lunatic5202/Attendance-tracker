@@ -36,6 +36,15 @@ Instead of manually entering attendance, employees simply stand in front of a ca
 * 🚫 **Duplicate Scan Protection**
 
   * Prevents accidental repeated check-ins/check-outs.
+* ⏳ **Check-Out Buffer**
+
+  * A check-out scan is rejected until a minimum work buffer (default 4 hours, `MIN_CHECKOUT_HOURS`) has passed since check-in. Enforced on the server, not just the UI.
+* 🔒 **Secure Kiosk + Admin Console**
+
+  * Employees use the public kiosk with their face and **no accounts or passwords**. All employee data, logs, and face enrollment live behind a password-protected administrator console.
+* 🗄️ **Encrypted at Rest**
+
+  * Employee details, attendance timestamps, and face templates are encrypted at rest with authenticated encryption using `ATTENDANCE_MASTER_KEY`.
 
 ---
 
@@ -90,9 +99,16 @@ Employee works
         ↓
 Second scan
         ↓
-   CHECK-OUT
-        ↓
-Calculate working hours
+Has the check-out
+buffer (default 4h)
+passed since check-in?
+   /                 \
+ No                   Yes
+  │                    │
+  │               CHECK-OUT
+  │                    │
+Rejected with         Calculate
+"unlocks at" time   working hours
 ```
 
 Employees do not need to manually select **Check In** or **Check Out**.
@@ -104,14 +120,13 @@ Employees do not need to manually select **Check In** or **Check Out**.
 ### Backend / Recognition
 
 * **Python**
-* **OpenCV**
-* Face recognition / face embedding model
-* **FastAPI** *(planned/optional)*
+* **FastAPI** backend with signed, HttpOnly admin session cookies
+* **OpenCV** Haar cascade (detection) + LBPH (recognition)
+* **cryptography** (Fernet) authenticated encryption for data at rest
 
 ### Database
 
-* **SQLite** for development
-* **PostgreSQL** for production
+* **SQLite** (single-file, zero-config — recommended for office kiosk deployments)
 
 ### Frontend
 
@@ -276,6 +291,50 @@ Recommended practices:
 
 ---
 
+## 🔐 Access Model & Deployment
+
+The tracker has exactly two experiences, so nothing depends on employees remembering passwords or keys.
+
+| Who                | How they sign in               | What they can do                                   |
+| ------------------ | ------------------------------ | -------------------------------------------------- |
+| **Employees**      | Face scan at the public kiosk  | Check in / check out only — no data is exposed     |
+| **Administrators** | Password on the admin console  | Enroll faces, manage employees, view all logs      |
+
+* The kiosk scan route is the only public API. It only creates attendance for an **enrolled, active, recognized** face.
+* **Enrollment is never public** — only an administrator can register an employee and capture their face, so strangers can't add themselves to the system.
+* Employee logs, statistics, departments, employee records, and manual overrides all return `401` without a valid administrator session.
+* An admin session lasts `ADMIN_SESSION_TTL` (default 8h) and is tracked with a signed, HttpOnly cookie. Use the **Admin · Logout** button when done.
+
+### First-time deployment
+
+1. Install dependencies and copy the example config:
+
+   ```bash
+   pip install -r requirements.txt
+   cp .env.example .env
+   ```
+
+2. Edit `.env`:
+
+   * `ADMIN_PASSWORD` — choose a strong random value. This is the **only** password in the system; keep it with the company owner(s), not printed in the office.
+   * `ATTENDANCE_MASTER_KEY` — generate one with `python -c "import secrets; print(secrets.token_urlsafe(48))"`. It encrypts all employee data and face templates at rest. Back it up; losing it makes encrypted data unrecoverable.
+   * `MIN_CHECKOUT_HOURS` — the minimum time between check-in and check-out (the work buffer). Default `4`.
+   * `ALLOWED_ORIGINS` — the exact browser origin (your kiosk/server hostname). Never `*`.
+   * `ENVIRONMENT=production` to enable secure cookies.
+
+3. Build the frontend once, then start:
+
+   ```bash
+   cd frontend && npm install && npm run build && cd ..
+   python main.py
+   ```
+
+4. Open the app, go to **Employees → Register Employee**, add each person, and **Enroll** their face from the admin console. Verify one real check-in followed by an early rejected check-out before opening the kiosk to staff.
+
+> The app reads `.env` automatically at startup. After changing `.env`, restart the service.
+
+---
+
 ## 🛡️ Anti-Spoofing
 
 A future version will include **liveness detection** to reduce attempts to authenticate using:
@@ -334,10 +393,10 @@ Reject    Recognize
 
 ### Phase 4 — Security
 
+* [x] Secure biometric storage
+* [x] Admin authentication
+* [x] Role-based access (kiosk vs admin console)
 * [ ] Liveness detection
-* [ ] Secure biometric storage
-* [ ] Admin authentication
-* [ ] Role-based access
 
 ### Phase 5 — Deployment
 

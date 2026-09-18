@@ -1,11 +1,12 @@
-import React, { useEffect, useState } from 'react'
-import { api, today } from './api'
+import React, { useCallback, useEffect, useState } from 'react'
+import { api } from './api'
 import Home from './pages/Home'
 import Dashboard from './pages/Dashboard'
 import Scan from './pages/Scan'
 import Employees from './pages/Employees'
 import AttendancePage from './pages/AttendancePage'
 import AdminLogin from './components/AdminLogin'
+import ErrorBoundary from './components/ErrorBoundary'
 import { Toasts, toast } from './components/Toast'
 
 const NAV = [
@@ -56,23 +57,29 @@ export default function App() {
   }, [])
 
   const adminRoute = route.startsWith('dashboard') || route.startsWith('employees') || route.startsWith('attendance')
-  useEffect(() => {
-    if (!adminRoute) {
-      setAdmin(null)
-      return
-    }
-    api.adminSession().then(() => setAdmin(true)).catch(() => setAdmin(false))
-  }, [adminRoute])
 
-  let page = <Scan />
-  if (route.startsWith('scan')) page = <Scan />
+  const verifySession = useCallback(() => {
+    api.adminSession().then(() => setAdmin(true)).catch(() => setAdmin(false))
+  }, [])
+  useEffect(() => { verifySession() }, [verifySession])
+  useEffect(() => { if (adminRoute) verifySession() }, [adminRoute, verifySession])
+
+  function logout() {
+    api.adminLogout().then(() => { setAdmin(false); navigate('scan') }).catch(() => { setAdmin(false); navigate('scan') })
+  }
+
+  let page
+  if (route.startsWith('dashboard')) page = <Dashboard />
+  else if (route.startsWith('scan') || route === 'home') page = <Scan admin={!!admin} />
   else if (route.startsWith('employees')) page = <Employees />
   else if (route.startsWith('attendance')) page = <AttendancePage />
-  else if (route === 'home') page = <Scan />
+  else page = <Scan admin={!!admin} />
 
   if (adminRoute) {
     page = admin === null ? <div className="empty">Checking administrator session…</div> : admin ? page : <AdminLogin onLogin={() => setAdmin(true)} />
   }
+
+  const nav = admin ? NAV : NAV.filter((item) => item.to === 'scan')
 
   return (
     <div className="app fade-in">
@@ -87,6 +94,11 @@ export default function App() {
         <div className="top-actions">
           <Clock />
           <button className="btn sm" onClick={() => navigate('scan')}>Scan Now</button>
+          {admin ? (
+            <button className="btn sm ghost" onClick={logout}>Admin · Logout</button>
+          ) : (
+            <button className="btn sm ghost" onClick={() => navigate('dashboard')}>Admin Login</button>
+          )}
           <span className="series-tag">
             Engine <b data-engine>{engine ?? '…'}</b>
           </span>
@@ -95,9 +107,9 @@ export default function App() {
 
       <div className="shell">
         <aside className="sidebar">
-          <span className="side-label">Operations</span>
+          <span className="side-label">{admin ? 'Operations / Admin' : 'Kiosk / Employee Scan'}</span>
           <nav className="nav">
-            {NAV.map((item) => (
+            {nav.map((item) => (
               <a
                 key={item.to}
                 className={`navlink ${route.startsWith(item.to) ? 'active' : ''}`}
@@ -109,12 +121,23 @@ export default function App() {
             ))}
           </nav>
           <div className="sidebar-foot">
-            date <b>·</b> {today()} <br />
-            infra <b>·</b> face-attendance
+            {admin ? (
+              <>
+                console <b>·</b> restricted to admins <br />
+                data <b>·</b> encrypted at rest
+              </>
+            ) : (
+              <>
+                kiosk <b>·</b> face scan only <br />
+                enrollment <b>·</b> admin-gated
+              </>
+            )}
           </div>
         </aside>
 
-        <main className="content">{page}</main>
+        <main className="content">
+          <ErrorBoundary>{page}</ErrorBoundary>
+        </main>
       </div>
 
       <footer className="page-foot">

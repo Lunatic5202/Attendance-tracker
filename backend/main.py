@@ -4,10 +4,17 @@ Run with:
     uvicorn backend.main:app --reload --port 8000
 """
 
-import base64
-import io
 import os
 from pathlib import Path
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+
+from dotenv import load_dotenv  # noqa: E402  (must run before backend imports)
+
+load_dotenv(BASE_DIR / ".env")
+
+import base64
+import io
 
 import numpy as np
 from fastapi import Cookie, Depends, FastAPI, File, HTTPException, Query, Request, Response, UploadFile
@@ -29,7 +36,6 @@ from backend.security import (
     verify_session,
 )
 
-BASE_DIR = Path(__file__).resolve().parent.parent
 FRONTEND_DIST = BASE_DIR / "frontend" / "dist"
 DATA_DIR = BASE_DIR / "data"
 
@@ -44,6 +50,19 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def _cache_headers(request: Request, call_next):
+    """Never cache the SPA index.html (its hashed asset names change on every
+    build, so a cached copy points at deleted bundles -> blank white page).
+    Assets under /assets are content-hashed, so cache them forever."""
+    response = await call_next(request)
+    if request.url.path.startswith("/assets/"):
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    elif response.status_code == 200 and "text/html" in response.headers.get("content-type", ""):
+        response.headers["Cache-Control"] = "no-store, must-revalidate"
+    return response
 
 
 @app.on_event("startup")
@@ -136,6 +155,12 @@ def health():
 
 @app.post("/api/admin/login")
 def admin_login(body: AdminLogin, response: Response):
+    if not os.getenv("ADMIN_PASSWORD"):
+        raise HTTPException(
+            503,
+            "The administrator password is not configured. "
+            "Set ADMIN_PASSWORD in the server environment and restart.",
+        )
     if not admin_password_matches(body.password):
         raise HTTPException(401, "Invalid administrator password.")
     response.set_cookie(
@@ -353,7 +378,7 @@ def manual_attendance(body: ManualRequest, _: bool = Depends(require_admin)):
     try:
         return attendance.record_scan(body.employee_id, source=body.action)
     except AttendanceError as exc:
-        return JSONResponse({"action": exc.code.upper(), "message": exc.message}, status_code=409)
+        return JSONResponse({"action": exc.code.upper(), "message": exc.message, **exc.info}, status_code=409)
 
 
 @app.get("/api/attendance")

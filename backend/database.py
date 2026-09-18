@@ -8,6 +8,8 @@ import os
 import sqlite3
 from datetime import datetime
 
+from backend.security import encrypt_text
+
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(BASE_DIR, "data")
 DB_PATH = os.getenv("ATTENDANCE_DB", os.path.join(DATA_DIR, "attendance.db"))
@@ -58,6 +60,29 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_attendance_employee ON attendance(employee_id);
             """
         )
+        _migrate_legacy_plaintext(conn)
+
+
+def _migrate_legacy_plaintext(conn: sqlite3.Connection) -> None:
+    """Encrypt records written by pre-security versions.
+
+    Old builds stored profile fields and timestamps as plaintext. New writes
+    always encrypt them, so any value without the ``v1:`` ciphertext marker is
+    an unencrypted legacy value and is encrypted in place with the current key.
+    """
+    for table, fields in (
+        ("employees", ("name", "department", "role", "email", "phone", "created_at")),
+        ("attendance", ("check_in", "check_out", "created_at")),
+    ):
+        columns = ", ".join(fields)
+        rows = conn.execute(f"SELECT rowid, {columns} FROM {table}").fetchall()
+        for row in rows:
+            changes = [(f, encrypt_text(str(row[f]))) for f in fields if row[f] and not str(row[f]).startswith("v1:")]
+            if not changes:
+                continue
+            sets = ", ".join(f"{field} = ?" for field, _ in changes)
+            values = [value for _, value in changes] + [row["rowid"]]
+            conn.execute(f"UPDATE {table} SET {sets} WHERE rowid = ?", values)
 
 
 def next_employee_id(conn: sqlite3.Connection) -> str:

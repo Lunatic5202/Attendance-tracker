@@ -87,6 +87,28 @@ class OpenCVFaceEngine:
         self._model = None
         self._model_sig = None
         FACES_DIR.mkdir(parents=True, exist_ok=True)
+        self._migrate_legacy_faces()
+
+    def _migrate_legacy_faces(self) -> None:
+        """Encrypt templates left behind by pre-encryption builds.
+
+        Older versions stored plain ``<label>.jpg`` crops. Newer versions keep
+        only ``<label>.enc`` (Fernet-encrypted). Re-encrypt any legacy crop in
+        place so existing enrollments keep working after an upgrade.
+        """
+        for path in sorted(FACES_DIR.glob("*.jpg")):
+            try:
+                label = int(path.stem.split(".")[0])
+            except ValueError:
+                continue
+            target = FACES_DIR / f"{label}.enc"
+            if not target.exists():
+                try:
+                    target.write_bytes(encrypt_bytes(path.read_bytes()))
+                except Exception as exc:
+                    log.warning("Could not migrate face template %s: %s", path, exc)
+                    continue
+            path.unlink(missing_ok=True)
 
     # ---- helpers ---------------------------------------------------------
     def _gray(self, image):
@@ -148,7 +170,7 @@ class OpenCVFaceEngine:
         """
         sig = tuple(
             (p.stat().st_mtime_ns, p.stat().st_size)
-            for p in sorted(FACES_DIR.glob("*.jpg"))
+            for p in sorted(FACES_DIR.glob("*.enc"))
         )
         if sig != self._model_sig and self._model is not None:
             self._model = None  # templates changed -> drop cache

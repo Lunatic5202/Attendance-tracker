@@ -9,7 +9,7 @@ Rules:
 
 import os
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from backend import database as db
 from backend.security import decrypt_text, encrypt_text, public_attendance, public_employee
@@ -79,10 +79,17 @@ def record_scan(employee_id: str, source: str = "face", late_at: str = DEFAULT_L
             seconds = (_parse_time(now) - _parse_time(check_in)).total_seconds()
             if seconds < MIN_CHECKOUT_HOURS * 3600:
                 remaining = max(1, int((MIN_CHECKOUT_HOURS * 3600 - seconds + 59) // 60))
+                unlocks_at = (_parse_time(check_in) + timedelta(hours=MIN_CHECKOUT_HOURS)).strftime("%H:%M")
                 raise AttendanceError(
                     "checkout_too_early",
-                    f"Check-out is available after {MIN_CHECKOUT_HOURS:g} hours from check-in.",
+                    (
+                        f"Check-in is held until {unlocks_at} — "
+                        f"{MIN_CHECKOUT_HOURS:g} hours after check-in at {check_in[:5]}."
+                    ),
                     employee_id=employee_id,
+                    employee=public_employee(emp),
+                    check_in=check_in[:5],
+                    unlocks_at=unlocks_at,
                     minutes_remaining=remaining,
                     min_checkout_hours=MIN_CHECKOUT_HOURS,
                 )
@@ -97,6 +104,7 @@ def record_scan(employee_id: str, source: str = "face", late_at: str = DEFAULT_L
                 "duplicate_scan",
                 "Attendance already recorded for today (already checked out).",
                 employee_id=employee_id,
+                employee=public_employee(emp),
                 date=date,
             )
         conn.commit()

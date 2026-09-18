@@ -8,6 +8,7 @@ const actions = {
   'CHECK-OUT': { label: 'Check-Out', cls: 'out', icon: '→' },
   UNKNOWN: { label: 'Unknown Face', cls: 'idle', icon: '?' },
   DUPLICATE_SCAN: { label: 'Duplicate Rejected', cls: 'idle', icon: '!' },
+  CHECKOUT_TOO_EARLY: { label: 'Check-Out Held', cls: 'warn', icon: '⏱' },
   DEMO_NEEDS_EMPLOYEE: { label: 'Pick Employee', cls: 'idle', icon: '!' },
 }
 
@@ -55,6 +56,10 @@ export default function Scan() {
       toast(`${res.employee?.name} checked out · ${hrs}`, { ok: true })
     } else if (action === 'DUPLICATE_SCAN') {
       pushLog('SCAN', 'duplicate rejected — day already closed', 'err-line')
+    } else if (action === 'CHECKOUT_TOO_EARLY') {
+      const unlocks = res.unlocks_at ? ` unlocks at ${fmtTime(res.unlocks_at)}` : ''
+      pushLog('VERIFY', `${res.employee?.name || 'Employee'} held — check-out${unlocks}`, 'err-line')
+      toast(`Check-out held${unlocks}`)
     } else if (action === 'UNKNOWN') {
       pushLog('VERIFY', res.message || 'face did not match any template', 'err-line')
     } else if (action === 'DEMO_NEEDS_EMPLOYEE') {
@@ -70,7 +75,7 @@ export default function Scan() {
         <div>
           <span className="kicker plain">Kiosk // Live Attendance</span>
           <h1>Face <b>Scan</b></h1>
-          <div className="sub">first scan of the day → CHECK-IN · second scan → CHECK-OUT</div>
+          <div className="sub">first scan → CHECK-IN · a later scan after the work buffer → CHECK-OUT</div>
         </div>
         <label className="row" style={{ gap: '0.5rem', cursor: 'pointer' }}>
           <input type="checkbox" checked={scanning} onChange={(e) => setScanning(e.target.checked)} />
@@ -117,6 +122,10 @@ export default function Scan() {
                   <div className="rc-meta mono">look into the camera to record</div>
                 </div>
               </div>
+            )}
+
+            {last?.message && last.action !== 'CHECK-IN' && last.action !== 'CHECK-OUT' && (
+              <div className="rc-note">{last.message}</div>
             )}
 
             {last?.attendance && (
