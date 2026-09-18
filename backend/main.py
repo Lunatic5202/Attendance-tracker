@@ -10,15 +10,24 @@ import os
 from pathlib import Path
 
 import numpy as np
-from fastapi import FastAPI, File, HTTPException, Query, UploadFile
+from fastapi import Cookie, Depends, FastAPI, File, HTTPException, Query, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from backend import attendance, database as db
+from backend import attendance, database as db, security
 from backend.attendance import AttendanceError
 from backend.face_recognition import engine
+from backend.security import (
+    SESSION_COOKIE,
+    admin_password_matches,
+    create_session,
+    public_attendance,
+    public_employee,
+    security_status,
+    verify_session,
+)
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 FRONTEND_DIST = BASE_DIR / "frontend" / "dist"
@@ -26,9 +35,11 @@ DATA_DIR = BASE_DIR / "data"
 
 app = FastAPI(title="Face Attendance Tracker", version="0.1.0")
 
+ALLOWED_ORIGINS = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "http://localhost:8000").split(",") if o.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -71,6 +82,10 @@ class ManualRequest(BaseModel):
     action: str = Field(pattern="^(in|out)$")
 
 
+class AdminLogin(BaseModel):
+    password: str = Field(min_length=1, max_length=256)
+
+
 # --------------------------------------------------------------------------
 # Helpers
 # --------------------------------------------------------------------------
@@ -102,7 +117,13 @@ def _decode_image(payload: str | None, upload: UploadFile | None = None):
 def _employee_list():
     with db.get_conn() as conn:
         rows = conn.execute("SELECT * FROM employees ORDER BY created_at DESC").fetchall()
-    return [{**dict(r), "face_enrolled": bool(r["face_available"])} for r in rows]
+    return [public_employee(r) for r in rows]
+
+
+def require_admin(admin_cookie: str | None = Cookie(None, alias=SESSION_COOKIE)):
+    if not verify_session(admin_cookie):
+        raise HTTPException(401, "Administrator access required.")
+    return True
 
 
 # --------------------------------------------------------------------------
@@ -110,14 +131,40 @@ def _employee_list():
 # --------------------------------------------------------------------------
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "face_engine": engine.name}
+    return {"status": "ok", "face_engine": engine.name, **security_status()}
+
+
+@app.post("/api/admin/login")
+def admin_login(body: AdminLogin, response: Response):
+    if not admin_password_matches(body.password):
+        raise HTTPException(401, "Invalid administrator password.")
+    response.set_cookie(
+        SESSION_COOKIE,
+        create_session(),
+        httponly=True,
+        secure=os.getenv("ENVIRONMENT", "development").lower() == "production",
+        samesite="strict",
+        max_age=int(os.getenv("ADMIN_SESSION_TTL", "28800")),
+    )
+    return {"authenticated": True}
+
+
+@app.post("/api/admin/logout")
+def admin_logout(response: Response):
+    response.delete_cookie(SESSION_COOKIE)
+    return {"authenticated": False}
+
+
+@app.get("/api/admin/session")
+def admin_session(_: bool = Depends(require_admin)):
+    return {"authenticated": True}
 
 
 # --------------------------------------------------------------------------
 # Employees
 # --------------------------------------------------------------------------
 @app.get("/api/employees")
-def list_employees(q: str | None = None):
+def list_employees(q: str | None = None, _: bool = Depends(require_admin)):
     employees = _employee_list()
     if q:
         employees = [
@@ -130,7 +177,7 @@ def list_employees(q: str | None = None):
 
 
 @app.post("/api/employees")
-def create_employee(body: EmployeeCreate):
+def create_employee(body: EmployeeCreate, _: bool = Depends(require_admin)):
     with db.get_conn() as conn:
         emp_id = db.next_employee_id(conn)
         conn.execute(
@@ -138,7 +185,7 @@ def create_employee(body: EmployeeCreate):
             INSERT INTO employees (id, name, department, role, email, phone, created_at)
             VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (emp_id, body.name, body.department, body.role, body.email, body.phone, db.now_str()),
+            (emp_id, *[security.encrypt_text(v) for v in (body.name, body.department, body.role, body.email, body.phone)], security.encrypt_text(db.now_str())),
         )
     new = {"id": emp_id, "name": body.name, "department": body.department,
            "role": body.role, "email": body.email, "phone": body.phone,
@@ -154,16 +201,16 @@ def create_employee(body: EmployeeCreate):
 
 
 @app.get("/api/employees/{employee_id}")
-def get_employee(employee_id: str):
+def get_employee(employee_id: str, _: bool = Depends(require_admin)):
     with db.get_conn() as conn:
         row = conn.execute("SELECT * FROM employees WHERE id = ?", (employee_id,)).fetchone()
     if row is None:
         raise HTTPException(404, "Employee not found.")
-    return {**dict(row), "face_enrolled": bool(row["face_available"])}
+    return public_employee(row)
 
 
 @app.patch("/api/employees/{employee_id}")
-def update_employee(employee_id: str, body: EmployeeUpdate):
+def update_employee(employee_id: str, body: EmployeeUpdate, _: bool = Depends(require_admin)):
     with db.get_conn() as conn:
         row = conn.execute("SELECT * FROM employees WHERE id = ?", (employee_id,)).fetchone()
         if row is None:
@@ -173,11 +220,15 @@ def update_employee(employee_id: str, body: EmployeeUpdate):
             return dict(row)
         sets, vals = [], []
         for key, value in fields.items():
+            if key in {"name", "department", "role", "email", "phone"}:
+                value = security.encrypt_text(value)
             sets.append(f"{key} = ?")
             vals.append(value)
         vals.append(employee_id)
         conn.execute(f"UPDATE employees SET {', '.join(sets)} WHERE id = ?", vals)
-    return get_employee(employee_id)
+    with db.get_conn() as conn:
+        row = conn.execute("SELECT * FROM employees WHERE id = ?", (employee_id,)).fetchone()
+    return public_employee(row)
 
 
 def _remove_face(label: int | None) -> None:
@@ -192,7 +243,7 @@ def _remove_face(label: int | None) -> None:
 
 
 @app.delete("/api/employees/{employee_id}")
-def delete_employee(employee_id: str):
+def delete_employee(employee_id: str, _: bool = Depends(require_admin)):
     with db.get_conn() as conn:
         row = conn.execute("SELECT face_label FROM employees WHERE id = ?", (employee_id,)).fetchone()
         label = row["face_label"] if row else None
@@ -226,7 +277,7 @@ def _enroll_face(employee_id: str, frame):
 
 
 @app.post("/api/employees/{employee_id}/face")
-async def enroll_face(employee_id: str, file: UploadFile | None = File(None)):
+async def enroll_face(employee_id: str, file: UploadFile | None = File(None), _: bool = Depends(require_admin)):
     frame = _decode_image(None, file) if file else None
     if frame is None:
         raise HTTPException(400, "Provide an image file to enroll the face.")
@@ -235,7 +286,7 @@ async def enroll_face(employee_id: str, file: UploadFile | None = File(None)):
 
 
 @app.get("/api/employees/{employee_id}/face")
-def face_status(employee_id: str):
+def face_status(employee_id: str, _: bool = Depends(require_admin)):
     with db.get_conn() as conn:
         row = conn.execute(
             "SELECT face_available, face_label FROM employees WHERE id = ?",
@@ -247,12 +298,14 @@ def face_status(employee_id: str):
 
 
 @app.get("/api/departments")
-def departments():
+def departments(_: bool = Depends(require_admin)):
     with db.get_conn() as conn:
-        rows = conn.execute(
-            "SELECT department, COUNT(*) AS count FROM employees GROUP BY department"
-        ).fetchall()
-    return [dict(r) for r in rows]
+        rows = conn.execute("SELECT department FROM employees").fetchall()
+    counts = {}
+    for row in rows:
+        department = security.decrypt_text(row["department"]) or "General"
+        counts[department] = counts.get(department, 0) + 1
+    return [{"department": department, "count": count} for department, count in counts.items()]
 
 
 # --------------------------------------------------------------------------
@@ -282,15 +335,7 @@ def scan_attendance(body: ScanRequest):
             ).fetchone()
         employee_id = emp["id"]
     else:
-        employee_id = body.employee_id
-        if not employee_id:
-            # Demo mode without a camera: allow a simulated scan.
-            return JSONResponse(
-                {
-                    "action": "DEMO_NEEDS_EMPLOYEE",
-                    "message": "An employee_id is required in demo mode.",
-                }
-            )
+        raise HTTPException(503, "Face recognition is unavailable; public scanning is disabled.")
 
     try:
         result = attendance.record_scan(employee_id, source="face")
@@ -304,7 +349,7 @@ def scan_attendance(body: ScanRequest):
 
 
 @app.post("/api/attendance/manual")
-def manual_attendance(body: ManualRequest):
+def manual_attendance(body: ManualRequest, _: bool = Depends(require_admin)):
     try:
         return attendance.record_scan(body.employee_id, source=body.action)
     except AttendanceError as exc:
@@ -312,14 +357,14 @@ def manual_attendance(body: ManualRequest):
 
 
 @app.get("/api/attendance")
-def get_attendance(date: str | None = Query(None), employee_id: str | None = None):
+def get_attendance(date: str | None = Query(None), employee_id: str | None = None, _: bool = Depends(require_admin)):
     if employee_id:
         return attendance.get_by_employee(employee_id)
     return attendance.get_by_date(date or db.today_str())
 
 
 @app.get("/api/stats")
-def stats(date: str | None = None):
+def stats(date: str | None = None, _: bool = Depends(require_admin)):
     return attendance.summary(date)
 
 

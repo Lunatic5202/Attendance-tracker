@@ -5,6 +5,7 @@ import Dashboard from './pages/Dashboard'
 import Scan from './pages/Scan'
 import Employees from './pages/Employees'
 import AttendancePage from './pages/AttendancePage'
+import AdminLogin from './components/AdminLogin'
 import { Toasts, toast } from './components/Toast'
 
 const NAV = [
@@ -15,7 +16,7 @@ const NAV = [
 ]
 
 function readRoute() {
-  return window.location.hash.replace(/^#\/?/, '') || 'dashboard'
+  return window.location.hash.replace(/^#\/?/, '') || 'scan'
 }
 
 export function useRoute() {
@@ -48,21 +49,35 @@ function Clock() {
 export default function App() {
   const route = useRoute()
   const [engine, setEngine] = useState(null)
+  const [admin, setAdmin] = useState(null)
 
   useEffect(() => {
     api.health().then((h) => setEngine(h.face_engine)).catch(() => setEngine('offline'))
   }, [])
 
-  let page = <Dashboard />
+  const adminRoute = route.startsWith('dashboard') || route.startsWith('employees') || route.startsWith('attendance')
+  useEffect(() => {
+    if (!adminRoute) {
+      setAdmin(null)
+      return
+    }
+    api.adminSession().then(() => setAdmin(true)).catch(() => setAdmin(false))
+  }, [adminRoute])
+
+  let page = <Scan />
   if (route.startsWith('scan')) page = <Scan />
   else if (route.startsWith('employees')) page = <Employees />
   else if (route.startsWith('attendance')) page = <AttendancePage />
-  else if (route === 'home') page = <Home />
+  else if (route === 'home') page = <Scan />
+
+  if (adminRoute) {
+    page = admin === null ? <div className="empty">Checking administrator session…</div> : admin ? page : <AdminLogin onLogin={() => setAdmin(true)} />
+  }
 
   return (
     <div className="app fade-in">
       <header className="topbar">
-        <a className="logo" href="#/home" onClick={() => navigate('dashboard')}>
+        <a className="logo" href="#/scan" onClick={() => navigate('scan')}>
           <span className="logo-mark">BT</span>
           <span className="logo-type">
             <b>BT Projects</b>

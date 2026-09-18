@@ -17,6 +17,9 @@ async function req(path, options = {}) {
 
 export const api = {
   health: () => req('/health'),
+  adminSession: () => req('/admin/session'),
+  adminLogin: (password) => req('/admin/login', { method: 'POST', body: JSON.stringify({ password }) }),
+  adminLogout: () => req('/admin/logout', { method: 'POST' }),
 
   employees: () => req('/employees'),
   employee: (id) => req(`/employees/${id}`),

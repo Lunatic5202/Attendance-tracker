@@ -14,6 +14,8 @@ from pathlib import Path
 
 import numpy as np
 
+from backend.security import decrypt_bytes, encrypt_bytes
+
 log = logging.getLogger("face")
 
 DATA_DIR = Path(os.getenv("ATTENDANCE_DATA", "data"))
@@ -113,12 +115,18 @@ class OpenCVFaceEngine:
 
     def _rebuild_model(self):
         images, labels = [], []
-        for path in FACES_DIR.glob("*.jpg"):
+        for path in FACES_DIR.glob("*.enc"):
             try:
                 label = int(path.stem.split(".")[0])
             except ValueError:
                 continue
-            img = self.cv2.imread(str(path), self.cv2.IMREAD_GRAYSCALE)
+            try:
+                encrypted = path.read_bytes()
+                raw = np.frombuffer(decrypt_bytes(encrypted), dtype=np.uint8)
+                img = self.cv2.imdecode(raw, self.cv2.IMREAD_GRAYSCALE)
+            except Exception as exc:
+                log.warning("Could not decrypt face template %s: %s", path, exc)
+                continue
             if img is None or img.size == 0:
                 log.warning("Could not read face crop %s", path)
                 continue
@@ -155,9 +163,11 @@ class OpenCVFaceEngine:
         if crop is None:
             return False
         face = self._encode(image, crop)
-        path = FACES_DIR / f"{label}.jpg"
-        if not self.cv2.imwrite(str(path), face):
+        ok, encoded = self.cv2.imencode(".png", face)
+        if not ok:
             return False
+        path = FACES_DIR / f"{label}.enc"
+        path.write_bytes(encrypt_bytes(encoded.tobytes()))
         self._record(label)
         return True
 
@@ -167,7 +177,7 @@ class OpenCVFaceEngine:
         marker.write_text("registered", encoding="utf-8")
 
     def has(self, label: int) -> bool:
-        return (FACES_DIR / f"{label}.jpg").exists()
+        return (FACES_DIR / f"{label}.enc").exists()
 
     def recognize(self, image, candidates: list[int] | None = None) -> tuple[int, float] | None:
         crop = self._largest(image)

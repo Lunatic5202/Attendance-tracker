@@ -12,10 +12,12 @@ import logging
 from datetime import datetime
 
 from backend import database as db
+from backend.security import decrypt_text, encrypt_text, public_attendance, public_employee
 
 log = logging.getLogger("attendance")
 
 DEFAULT_LATE_AT = os.getenv("LATE_AT", "09:30")
+MIN_CHECKOUT_HOURS = float(os.getenv("MIN_CHECKOUT_HOURS", "4"))
 
 
 class AttendanceError(Exception):
@@ -69,16 +71,25 @@ def record_scan(employee_id: str, source: str = "face", late_at: str = DEFAULT_L
                 INSERT INTO attendance (employee_id, date, check_in, check_out, hours, status, source, created_at)
                 VALUES (?, ?, ?, NULL, 0, ?, ?, ?)
                 """,
-                (employee_id, date, now, status, source, now),
+                (employee_id, date, encrypt_text(now), status, source, encrypt_text(now)),
             )
             action = "CHECK-IN"
         elif row["check_out"] is None:
-            check_in = row["check_in"]
+            check_in = decrypt_text(row["check_in"])
             seconds = (_parse_time(now) - _parse_time(check_in)).total_seconds()
+            if seconds < MIN_CHECKOUT_HOURS * 3600:
+                remaining = max(1, int((MIN_CHECKOUT_HOURS * 3600 - seconds + 59) // 60))
+                raise AttendanceError(
+                    "checkout_too_early",
+                    f"Check-out is available after {MIN_CHECKOUT_HOURS:g} hours from check-in.",
+                    employee_id=employee_id,
+                    minutes_remaining=remaining,
+                    min_checkout_hours=MIN_CHECKOUT_HOURS,
+                )
             hours = round(max(0, seconds) / 3600, 3)
             conn.execute(
                 "UPDATE attendance SET check_out = ?, hours = ? WHERE id = ?",
-                (now, hours, row["id"]),
+                (encrypt_text(now), hours, row["id"]),
             )
             action = "CHECK-OUT"
         else:
@@ -94,7 +105,7 @@ def record_scan(employee_id: str, source: str = "face", late_at: str = DEFAULT_L
     return {
         "action": action,
         "message": f"{emp['name']} {action.lower()} recorded.",
-        "employee": dict(emp),
+        "employee": public_employee(emp),
         "attendance": fresh,
         "time": now,
     }
@@ -112,7 +123,7 @@ def fetch_entry(employee_id: str, date: str) -> dict | None:
         ).fetchone()
         if row is None:
             return None
-        entry = dict(row)
+        entry = public_attendance(row)
         if entry["hours"]:
             entry["hours_fmt"] = _format_hours(entry["hours"])
         return entry
@@ -133,7 +144,7 @@ def get_by_date(date: str) -> list[dict]:
             """,
             (date,),
         ).fetchall()
-        return [_decorate(dict(r)) for r in rows]
+        return [_decorate(public_attendance(r)) for r in rows]
 
 
 def get_by_employee(employee_id: str, limit: int = 60) -> list[dict]:
@@ -148,7 +159,7 @@ def get_by_employee(employee_id: str, limit: int = 60) -> list[dict]:
             """,
             (employee_id, limit),
         ).fetchall()
-        return [_decorate(dict(r)) for r in rows]
+        return [_decorate(public_attendance(r)) for r in rows]
 
 
 def summary(date: str | None = None) -> dict:
@@ -172,9 +183,12 @@ def summary(date: str | None = None) -> dict:
     avg_hours = round(sum(hours) / len(hours), 2) if hours else 0.0
     with db.get_conn() as conn:
         dep_rows = conn.execute(
-            "SELECT department, COUNT(*) AS c FROM employees WHERE is_active = 1 GROUP BY department"
+            "SELECT department FROM employees WHERE is_active = 1"
         ).fetchall()
-        departments = {r["department"]: r["c"] for r in dep_rows}
+        departments = {}
+        for row in dep_rows:
+            department = decrypt_text(row["department"]) or "General"
+            departments[department] = departments.get(department, 0) + 1
     return {
         "date": date,
         "total_employees": employees,

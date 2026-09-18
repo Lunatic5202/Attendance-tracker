@@ -14,8 +14,6 @@ const actions = {
 const star = () => new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true })
 
 export default function Scan() {
-  const [employees, setEmployees] = useState([])
-  const [employeeId, setEmployeeId] = useState('')
   const [scanning, setScanning] = useState(true)
   const [last, setLast] = useState(null)
   const [log, setLog] = useState([
@@ -23,13 +21,6 @@ export default function Scan() {
   ])
   const lock = useRef(false)
   const logBox = useRef(null)
-
-  useEffect(() => {
-    api.employees().then((list) => {
-      setEmployees(list)
-      if (list.length && !employeeId) setEmployeeId(list[0].id)
-    }).catch(() => {})
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (logBox.current) logBox.current.scrollTop = logBox.current.scrollHeight
@@ -68,15 +59,6 @@ export default function Scan() {
       pushLog('VERIFY', res.message || 'face did not match any template', 'err-line')
     } else if (action === 'DEMO_NEEDS_EMPLOYEE') {
       pushLog('VERIFY', 'camera/demo mode — use simulate below', 'err-line')
-    }
-  }
-
-  async function simulate() {
-    if (!employeeId) return toast('Pick an employee first')
-    try {
-      handleResult(await api.manual(employeeId, 'in'))
-    } catch (e) {
-      handleResult(e.data || { action: 'ERROR', message: 'simulate failed' })
     }
   }
 
@@ -166,21 +148,11 @@ export default function Scan() {
         </div>
       </div>
 
-      <div className="card tight" style={{ marginTop: '1.4rem' }}>
-        <div className="row">
-          <span className="series-tag">Simulate</span>
-          <select className="input" value={employeeId} onChange={(e) => setEmployeeId(e.target.value)}>
-            {employees.length === 0 && <option value="">No employees yet</option>}
-            {employees.map((e) => (
-              <option key={e.id} value={e.id}>{e.id} — {e.name}</option>
-            ))}
-          </select>
-          <button className="btn sm ghost" onClick={simulate}>Run Manual Check-In →</button>
-          <div className="spacer" style={{ flex: 1 }} />
-          <span className="mono" style={{ fontSize: '0.66rem', color: 'var(--muted)', letterSpacing: '0.1em' }}>
-            MANUAL OVERRIDE — for camera-less desks
-          </span>
-        </div>
+      <div className="card tight kiosk-note" style={{ marginTop: '1.4rem' }}>
+        <span className="series-tag">Secure kiosk</span>
+        <span className="mono" style={{ fontSize: '0.66rem', color: 'var(--muted)', letterSpacing: '0.1em' }}>
+          Only administrator-enrolled faces can create attendance records. Check-out unlocks after the configured work buffer.
+        </span>
       </div>
     </div>
   )
