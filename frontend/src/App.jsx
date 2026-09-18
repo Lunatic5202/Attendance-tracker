@@ -63,10 +63,10 @@ export default function App() {
     <div className="app fade-in">
       <header className="topbar">
         <a className="logo" href="#/home" onClick={() => navigate('dashboard')}>
-          <span className="logo-mark">AT</span>
+          <span className="logo-mark">BT</span>
           <span className="logo-type">
             <b>BT Projects</b>
-            <span>Attendance Tracker</span>
+            <span>Attendance System</span>
           </span>
         </a>
         <div className="top-actions">
