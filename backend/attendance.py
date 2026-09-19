@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 
 from backend import database as db
 from backend.security import decrypt_text, encrypt_text, public_attendance, public_employee
+from backend.store import store
 
 log = logging.getLogger("attendance")
 
@@ -51,27 +52,28 @@ def _format_hours(hours: float) -> str:
 
 def record_scan(employee_id: str, source: str = "face", late_at: str = DEFAULT_LATE_AT) -> dict:
     """Apply the auto check-in / check-out rule for one recognised employee."""
-    with db.get_conn() as conn:
-        emp = conn.execute(
-            "SELECT * FROM employees WHERE id = ? AND is_active = 1", (employee_id,)
-        ).fetchone()
+    with store.session() as s:
+        emp = s.get_active_employee(employee_id)
         if emp is None:
             raise AttendanceError("unknown_employee", "No active employee with that id.")
 
         date, now = db.today_str(), db.now_str()
-        row = conn.execute(
-            "SELECT * FROM attendance WHERE employee_id = ? AND date = ?",
-            (employee_id, date),
-        ).fetchone()
+        row = s.attendance_for(employee_id, date)
+        public = public_employee(emp)
 
         if row is None:
             status = "Late" if _is_late(now, late_at) else "Present"
-            conn.execute(
-                """
-                INSERT INTO attendance (employee_id, date, check_in, check_out, hours, status, source, created_at)
-                VALUES (?, ?, ?, NULL, 0, ?, ?, ?)
-                """,
-                (employee_id, date, encrypt_text(now), status, source, encrypt_text(now)),
+            s.insert_attendance(
+                {
+                    "employee_id": employee_id,
+                    "date": date,
+                    "check_in": encrypt_text(now),
+                    "check_out": None,
+                    "hours": 0,
+                    "status": status,
+                    "source": source,
+                    "created_at": encrypt_text(now),
+                }
             )
             action = "CHECK-IN"
         elif row["check_out"] is None:
@@ -87,54 +89,42 @@ def record_scan(employee_id: str, source: str = "face", late_at: str = DEFAULT_L
                         f"{MIN_CHECKOUT_HOURS:g} hours after check-in at {check_in[:5]}."
                     ),
                     employee_id=employee_id,
-                    employee=public_employee(emp),
+                    employee=public,
                     check_in=check_in[:5],
                     unlocks_at=unlocks_at,
                     minutes_remaining=remaining,
                     min_checkout_hours=MIN_CHECKOUT_HOURS,
                 )
             hours = round(max(0, seconds) / 3600, 3)
-            conn.execute(
-                "UPDATE attendance SET check_out = ?, hours = ? WHERE id = ?",
-                (encrypt_text(now), hours, row["id"]),
-            )
+            s.close_attendance(row["id"], encrypt_text(now), hours)
             action = "CHECK-OUT"
         else:
             raise AttendanceError(
                 "duplicate_scan",
                 "Attendance already recorded for today (already checked out).",
                 employee_id=employee_id,
-                employee=public_employee(emp),
+                employee=public,
                 date=date,
             )
-        conn.commit()
 
     fresh = fetch_entry(employee_id, date)
     return {
         "action": action,
-        "message": f"{emp['name']} {action.lower()} recorded.",
-        "employee": public_employee(emp),
+        "message": f"{public['name']} {action.lower()} recorded.",
+        "employee": public,
         "attendance": fresh,
         "time": now,
     }
 
 
 def fetch_entry(employee_id: str, date: str) -> dict | None:
-    with db.get_conn() as conn:
-        row = conn.execute(
-            """
-            SELECT a.*, e.name, e.department, e.role
-            FROM attendance a JOIN employees e ON e.id = a.employee_id
-            WHERE a.employee_id = ? AND a.date = ?
-            """,
-            (employee_id, date),
-        ).fetchone()
-        if row is None:
-            return None
-        entry = public_attendance(row)
-        if entry["hours"]:
-            entry["hours_fmt"] = _format_hours(entry["hours"])
-        return entry
+    entry = store.attendance_entry(employee_id, date)
+    if entry is None:
+        return None
+    entry = public_attendance(entry)
+    if entry["hours"]:
+        entry["hours_fmt"] = _format_hours(entry["hours"])
+    return entry
 
 
 def get_today() -> list[dict]:
@@ -142,64 +132,29 @@ def get_today() -> list[dict]:
 
 
 def get_by_date(date: str) -> list[dict]:
-    with db.get_conn() as conn:
-        rows = conn.execute(
-            """
-            SELECT a.*, e.name, e.department, e.role
-            FROM attendance a JOIN employees e ON e.id = a.employee_id
-            WHERE a.date = ?
-            ORDER BY a.check_in, a.check_out
-            """,
-            (date,),
-        ).fetchall()
-        return [_decorate(public_attendance(r)) for r in rows]
+    return [_decorate(public_attendance(r)) for r in store.attendance_by_date(date)]
 
 
 def get_by_employee(employee_id: str, limit: int = 60) -> list[dict]:
-    with db.get_conn() as conn:
-        rows = conn.execute(
-            """
-            SELECT a.*, e.name, e.department, e.role
-            FROM attendance a JOIN employees e ON e.id = a.employee_id
-            WHERE a.employee_id = ?
-            ORDER BY a.date DESC, a.check_in DESC
-            LIMIT ?
-            """,
-            (employee_id, limit),
-        ).fetchall()
-        return [_decorate(public_attendance(r)) for r in rows]
+    return [_decorate(public_attendance(r)) for r in store.attendance_by_employee(employee_id, limit)]
 
 
 def summary(date: str | None = None) -> dict:
     """Dashboard KPIs for a given date (defaults to today)."""
     date = date or db.today_str()
-    with db.get_conn() as conn:
-        employees = conn.execute(
-            "SELECT COUNT(*) AS c FROM employees WHERE is_active = 1"
-        ).fetchone()["c"]
-        rows = conn.execute(
-            """
-            SELECT check_in, check_out, hours, status
-            FROM attendance WHERE date = ?
-            """,
-            (date,),
-        ).fetchall()
+    rows = store.attendance_date_rows(date)
     present_today_count = len(rows)
     checked_out = sum(1 for r in rows if r["check_out"])
     late = sum(1 for r in rows if r["status"] == "Late")
     hours = [r["hours"] for r in rows if r["hours"]]
     avg_hours = round(sum(hours) / len(hours), 2) if hours else 0.0
-    with db.get_conn() as conn:
-        dep_rows = conn.execute(
-            "SELECT department FROM employees WHERE is_active = 1"
-        ).fetchall()
-        departments = {}
-        for row in dep_rows:
-            department = decrypt_text(row["department"]) or "General"
-            departments[department] = departments.get(department, 0) + 1
+    departments = {}
+    for department in store.departments(active_only=True):
+        name = decrypt_text(department) or "General"
+        departments[name] = departments.get(name, 0) + 1
     return {
         "date": date,
-        "total_employees": employees,
+        "total_employees": store.count_active_employees(),
         "present_today": present_today_count,
         "checked_out_today": checked_out,
         "late_today": late,

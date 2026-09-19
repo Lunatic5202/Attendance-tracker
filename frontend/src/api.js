@@ -37,6 +37,16 @@ export const api = {
     }
     return res.json()
   },
+  enrollFaces: async (id, files) => {
+    const form = new FormData()
+    for (const file of files) form.append('files', file)
+    const res = await fetch(`${BASE}/employees/${id}/face/upload`, { method: 'POST', body: form })
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}))
+      throw new Error(data.detail || 'Picture upload failed')
+    }
+    return res.json()
+  },
 
   scan: (image, employeeId) =>
     req('/attendance/scan', { method: 'POST', body: JSON.stringify({ image, employee_id: employeeId }) }),

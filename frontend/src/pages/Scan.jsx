@@ -14,14 +14,41 @@ const actions = {
 
 const star = () => new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true })
 
+const IDLE_SLEEP_MS = 30 * 1000
+
 export default function Scan() {
   const [scanning, setScanning] = useState(true)
+  const [asleep, setAsleep] = useState(false)
+  const [camError, setCamError] = useState(null)
   const [last, setLast] = useState(null)
   const [log, setLog] = useState([
     { t: 'SYS', s: 'attendance relay online — awaiting camera frames…', tone: '' },
   ])
   const lock = useRef(false)
   const logBox = useRef(null)
+  const asleepRef = useRef(false)
+  const lastActivity = useRef(Date.now())
+
+  useEffect(() => {
+    asleepRef.current = asleep
+  }, [asleep])
+
+  const poke = useCallback(() => {
+    lastActivity.current = Date.now()
+  }, [])
+
+  const onMotion = useCallback(() => {
+    poke()
+    if (asleepRef.current) setAsleep(false)
+  }, [poke])
+
+  useEffect(() => {
+    const t = setInterval(() => {
+      if (asleepRef.current) return
+      if (Date.now() - lastActivity.current >= IDLE_SLEEP_MS) setAsleep(true)
+    }, 3000)
+    return () => clearInterval(t)
+  }, [])
 
   useEffect(() => {
     if (logBox.current) logBox.current.scrollTop = logBox.current.scrollHeight
@@ -31,7 +58,7 @@ export default function Scan() {
     setLog((cur) => [...cur.slice(-29), { t, s, tone }])
 
   const runScan = useCallback(async (image) => {
-    if (lock.current) return
+    if (lock.current || asleepRef.current) return
     lock.current = true
     try {
       handleResult(await api.scan(image, undefined))
@@ -46,6 +73,7 @@ export default function Scan() {
     const action = res.action || 'UNKNOWN'
     const now = star()
     setLast({ action, employee: res.employee, attendance: res.attendance, message: res.message, time: now })
+    if (res.employee) poke()
 
     if (action === 'CHECK-IN') {
       pushLog('SCAN', `${res.employee?.name} — CHECK-IN @${now}`, 'ok-line')
@@ -87,7 +115,14 @@ export default function Scan() {
 
       <div className="scan-grid">
         <div className="cam-col">
-          <CameraCapture active={scanning} onFrame={runScan} />
+          <CameraCapture
+            active={scanning || asleep}
+            watch={scanning || asleep}
+            motionThreshold={0.05}
+            onMotion={onMotion}
+            onError={setCamError}
+            onFrame={runScan}
+          />
           <div className="cam-caption">
             <span>TARGET FRAME — HOLD STILL</span>
             <span className="mono">{scanning ? 'CAM 01 · LIVE' : 'CAM 01 · PAUSED'}</span>
@@ -163,6 +198,25 @@ export default function Scan() {
           Only administrator-enrolled faces can create attendance records. Check-out unlocks after the configured work buffer.
         </span>
       </div>
+
+      {asleep && (
+        <div className="kiosk-standby">
+          <div className="ks-radar">
+            <span className="ks-ring r1" />
+            <span className="ks-ring r2" />
+            <span className="ks-ring r3" />
+            <span className="ks-dot" />
+          </div>
+          <div className="ks-gate">
+            <div className="ks-kicker">TOUCHLESS KIOSK · STANDBY</div>
+            <h1>Wave to <b>Wake</b></h1>
+            <p className="ks-sub mono">
+              motion near the camera reopens live scan
+              {camError ? <span style={{ color: 'var(--bolt)' }}> · camera unavailable ({camError})</span> : null}
+            </p>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

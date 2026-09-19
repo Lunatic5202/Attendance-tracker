@@ -4,12 +4,36 @@ import CameraCapture from '../components/CameraCapture'
 import { toast } from '../components/Toast'
 
 function EnrollModal({ employee, onClose, onDone }) {
+  const first = !employee.face_enrolled
   const [busy, setBusy] = useState(false)
   const [lastShot, setLastShot] = useState(null)
+  const [mode, setMode] = useState('camera')
+  const [picked, setPicked] = useState([])
+  const [previews, setPreviews] = useState([])
 
-  const capture = useCallback(async (dataUrl) => setLastShot(dataUrl), [])
+  const capture = useCallback((dataUrl) => setLastShot(dataUrl), [])
+
+  useEffect(
+    () => () => previews.forEach((url) => URL.revokeObjectURL(url)),
+    [previews],
+  )
 
   async function submit() {
+    if (mode === 'upload') {
+      if (!picked.length) return toast('Choose at least one picture first')
+      setBusy(true)
+      try {
+        await api.enrollFaces(employee.id, picked)
+        toast(`Enrolled ${picked.length} picture(s) for ${employee.name}`, { ok: true })
+        onDone()
+        onClose()
+      } catch (e) {
+        toast(e.message || 'Picture upload failed')
+      } finally {
+        setBusy(false)
+      }
+      return
+    }
     if (!lastShot) return toast('Hold still and capture a frame first')
     setBusy(true)
     try {
@@ -24,6 +48,14 @@ function EnrollModal({ employee, onClose, onDone }) {
     }
   }
 
+  function pick(e) {
+    const files = Array.from(e.target.files || [])
+    if (!files.length) return
+    previews.forEach((url) => URL.revokeObjectURL(url))
+    setPicked(files)
+    setPreviews(files.map((f) => URL.createObjectURL(f)))
+  }
+
   return (
     <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div className="modal">
@@ -36,17 +68,47 @@ function EnrollModal({ employee, onClose, onDone }) {
             <span className="mono" style={{ fontWeight: 700, color: 'var(--navy-deep)' }}>{employee.name}</span>
             <span className="badge plain">{employee.department}</span>
           </div>
-          <CameraCapture active={!busy} onFrame={capture} />
-          <p className="muted" style={{ fontSize: '0.82rem', marginTop: '0.8rem' }}>
-            Look straight at the camera. The latest captured frame appears below and is enrolled
-            on submit. Only a compact embedding is stored.
-          </p>
-          {lastShot && <img src={lastShot} alt="face" style={{ width: '100%', maxHeight: 220, objectFit: 'cover', borderRadius: 'var(--radius)', border: '1px solid var(--line)' }} />}
+
+          {first && (
+            <div className="seg" style={{ marginBottom: '0.9rem' }}>
+              <button className={`seg-btn ${mode === 'camera' ? 'on' : ''}`} onClick={() => setMode('camera')}>Use camera</button>
+              <button className={`seg-btn ${mode === 'upload' ? 'on' : ''}`} onClick={() => setMode('upload')}>Upload picture(s)</button>
+            </div>
+          )}
+
+          {mode === 'camera' ? (
+            <>
+              <CameraCapture active={!busy} onFrame={capture} />
+              <p className="muted" style={{ fontSize: '0.82rem', marginTop: '0.8rem' }}>
+                Look straight at the camera. The latest captured frame appears below and is enrolled
+                on submit. Only a compact embedding is stored.
+              </p>
+              {lastShot && <img src={lastShot} alt="face" style={{ width: '100%', maxHeight: 220, objectFit: 'cover', borderRadius: 'var(--radius)', border: '1px solid var(--line)' }} />}
+            </>
+          ) : (
+            <>
+              <input type="file" multiple accept="image/*" onChange={pick} className="input" style={{ padding: '0.6rem' }} />
+              <p className="muted" style={{ fontSize: '0.82rem', marginTop: '0.8rem' }}>
+                Pick one or more clear, front-facing pictures of the employee. This option is only
+                available for the first enrollment.
+              </p>
+              {previews.length > 0 && (
+                <div className="row" style={{ gap: '0.5rem', flexWrap: 'wrap', marginTop: '0.5rem' }}>
+                  {previews.map((url, i) => (
+                    <img key={i} src={url} alt={`picture ${i + 1}`}
+                      style={{ width: 88, height: 88, objectFit: 'cover', borderRadius: 'var(--radius)', border: '1px solid var(--line)' }} />
+                  ))}
+                </div>
+              )}
+            </>
+          )}
         </div>
         <div className="mfoot">
           <button className="btn ghost" onClick={onClose}>Cancel</button>
-          <button className="btn" onClick={submit} disabled={busy || !lastShot}>
-            {busy ? 'Enrolling…' : 'Capture & Enroll Face'}
+          <button className="btn" onClick={submit} disabled={busy || (mode === 'camera' && !lastShot)}>
+            {busy
+              ? (mode === 'upload' ? 'Enrolling…' : 'Enrolling…')
+              : (mode === 'upload' ? `Upload & Enroll${picked.length ? ` (${picked.length})` : ''}` : (first ? 'Capture & Enroll Face' : 'Capture & Re-Enroll Face'))}
           </button>
         </div>
       </div>

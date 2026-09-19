@@ -59,6 +59,9 @@ class DemoFaceEngine:
                 return True
         return True
 
+    def enroll_many(self, label: int, images=None) -> bool:
+        return True
+
     def recognize(self, image, candidates: list[int] | None = None) -> tuple[int, float] | None:
         if not candidates:
             return None
@@ -139,7 +142,7 @@ class OpenCVFaceEngine:
         images, labels = [], []
         for path in FACES_DIR.glob("*.enc"):
             try:
-                label = int(path.stem.split(".")[0])
+                label = int(path.name.split(".", 1)[0].split("-", 1)[0])
             except ValueError:
                 continue
             try:
@@ -188,10 +191,43 @@ class OpenCVFaceEngine:
         ok, encoded = self.cv2.imencode(".png", face)
         if not ok:
             return False
+        self._clear(label)
         path = FACES_DIR / f"{label}.enc"
         path.write_bytes(encrypt_bytes(encoded.tobytes()))
         self._record(label)
         return True
+
+    def enroll_many(self, label: int, images) -> bool:
+        """Replace the templates for ``label`` with one per supplied image.
+
+        Multiple poses/pictures improve recognition. Returns ``True`` if at
+        least one image contained a usable face.
+        """
+        crops = []
+        for image in images:
+            crop = self._largest(image)
+            if crop is None:
+                continue
+            face = self._encode(image, crop)
+            ok, encoded = self.cv2.imencode(".png", face)
+            if ok:
+                crops.append(encrypt_bytes(encoded.tobytes()))
+        if not crops:
+            return False
+        self._clear(label)
+        if len(crops) == 1:
+            (FACES_DIR / f"{label}.enc").write_bytes(crops[0])
+        else:
+            for i, raw in enumerate(crops):
+                (FACES_DIR / f"{label}-{i}.enc").write_bytes(raw)
+        self._record(label)
+        return True
+
+    def _clear(self, label: int) -> None:
+        """Drop all stored templates/provenance for ``label`` (single + multi)."""
+        for path in FACES_DIR.glob(f"{label}*"):
+            if path.suffix in {".enc", ".meta"}:
+                path.unlink(missing_ok=True)
 
     def _record(self, label: int) -> None:
         # Store a small provenance file so we know a template exists.
@@ -199,7 +235,10 @@ class OpenCVFaceEngine:
         marker.write_text("registered", encoding="utf-8")
 
     def has(self, label: int) -> bool:
-        return (FACES_DIR / f"{label}.enc").exists()
+        return (
+            (FACES_DIR / f"{label}.enc").exists()
+            or any(FACES_DIR.glob(f"{label}-*.enc"))
+        )
 
     def recognize(self, image, candidates: list[int] | None = None) -> tuple[int, float] | None:
         crop = self._largest(image)

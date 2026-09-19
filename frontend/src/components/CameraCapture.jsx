@@ -9,7 +9,15 @@ export function captureDataURL(video) {
   return canvas.toDataURL('image/jpeg', 0.9)
 }
 
-export default function CameraCapture({ active = true, onFrame, mirror = true }) {
+export default function CameraCapture({
+  active = true,
+  onFrame,
+  mirror = true,
+  watch = false,
+  motionThreshold = 0.05,
+  onMotion,
+  onError,
+}) {
   const videoRef = useRef(null)
   const [error, setError] = useState(null)
   const [ready, setReady] = useState(false)
@@ -33,7 +41,10 @@ export default function CameraCapture({ active = true, onFrame, mirror = true })
         setReady(true)
         setError(null)
       })
-      .catch((e) => setError(e.name || 'camera_unavailable'))
+      .catch((e) => {
+        setError(e.name || 'camera_unavailable')
+        if (onError) onError(e.name || 'camera_unavailable')
+      })
 
     return () => {
       cancelled = true
@@ -41,7 +52,7 @@ export default function CameraCapture({ active = true, onFrame, mirror = true })
         stream.getTracks().forEach((t) => t.stop())
       }
     }
-  }, [active])
+  }, [active, onError])
 
   useEffect(() => {
     if (!ready || !onFrame || !videoRef.current) return
@@ -53,6 +64,43 @@ export default function CameraCapture({ active = true, onFrame, mirror = true })
     }, 2600)
     return () => clearInterval(timer)
   }, [ready, onFrame])
+
+  useEffect(() => {
+    if (!watch || !ready || !videoRef.current) return
+    const canvas = document.createElement('canvas')
+    canvas.width = 48
+    canvas.height = 36
+    const ctx = canvas.getContext('2d')
+    let prev = null
+    const timer = setInterval(() => {
+      const v = videoRef.current
+      if (!v || v.readyState < 2 || v.videoWidth === 0) return
+      ctx.drawImage(v, 0, 0, canvas.width, canvas.height)
+      let data
+      try {
+        data = ctx.getImageData(0, 0, canvas.width, canvas.height).data
+      } catch {
+        return
+      }
+      const cur = new Float32Array(canvas.width * canvas.height)
+      for (let i = 0, j = 0; i < data.length; i += 4, j++) {
+        cur[j] = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]
+      }
+      if (prev) {
+        let sum = 0
+        for (let i = 0; i < cur.length; i++) {
+          const d = cur[i] - prev[i]
+          sum += d > 0 ? d : -d
+        }
+        if (sum / cur.length / 255 > motionThreshold && onMotion) onMotion()
+      }
+      prev = cur
+    }, 400)
+    return () => {
+      clearInterval(timer)
+      prev = null
+    }
+  }, [watch, ready, motionThreshold, onMotion])
 
   return (
     <div className="camera">

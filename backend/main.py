@@ -26,6 +26,8 @@ from pydantic import BaseModel, Field
 from backend import attendance, database as db, security
 from backend.attendance import AttendanceError
 from backend.face_recognition import engine
+from backend.limits import scan_limiter
+from backend.store import store
 from backend.security import (
     SESSION_COOKIE,
     admin_password_matches,
@@ -38,6 +40,8 @@ from backend.security import (
 
 FRONTEND_DIST = BASE_DIR / "frontend" / "dist"
 DATA_DIR = BASE_DIR / "data"
+
+_MAX_IMAGE_BYTES = 8_000_000
 
 app = FastAPI(title="Face Attendance Tracker", version="0.1.0")
 
@@ -67,7 +71,7 @@ async def _cache_headers(request: Request, call_next):
 
 @app.on_event("startup")
 def _startup() -> None:
-    db.init_db()
+    store.init()
 
 
 # --------------------------------------------------------------------------
@@ -79,7 +83,7 @@ class EmployeeCreate(BaseModel):
     role: str = ""
     email: str = ""
     phone: str = ""
-    face_image: str | None = None  # base64 (data URL or raw)
+    face_image: str | None = Field(None, max_length=4_000_000)  # base64 (data URL or raw)
 
 
 class EmployeeUpdate(BaseModel):
@@ -92,7 +96,7 @@ class EmployeeUpdate(BaseModel):
 
 
 class ScanRequest(BaseModel):
-    image: str | None = None  # base64 frame from the browser camera
+    image: str | None = Field(None, max_length=4_000_000)  # base64 frame from the browser camera
     employee_id: str | None = None  # explicit id, only honoured by demo engine
 
 
@@ -112,8 +116,12 @@ def _decode_image(payload: str | None, upload: UploadFile | None = None):
     """Decode a base64 payload or an uploaded file into a numpy BGR frame."""
     raw = None
     if upload is not None:
-        raw = upload.file.read()
+        raw = upload.file.read(_MAX_IMAGE_BYTES + 1)
+        if len(raw) > _MAX_IMAGE_BYTES:
+            raise HTTPException(413, "Image file too large (max 8 MB).")
     elif payload:
+        if len(payload) > 4_000_000:
+            raise HTTPException(413, "Image payload too large.")
         if payload.startswith("data:"):
             payload = payload.split(",", 1)[1]
         try:
@@ -134,9 +142,7 @@ def _decode_image(payload: str | None, upload: UploadFile | None = None):
 
 
 def _employee_list():
-    with db.get_conn() as conn:
-        rows = conn.execute("SELECT * FROM employees ORDER BY created_at DESC").fetchall()
-    return [public_employee(r) for r in rows]
+    return [public_employee(r) for r in store.employees()]
 
 
 def require_admin(admin_cookie: str | None = Cookie(None, alias=SESSION_COOKIE)):
@@ -203,15 +209,23 @@ def list_employees(q: str | None = None, _: bool = Depends(require_admin)):
 
 @app.post("/api/employees")
 def create_employee(body: EmployeeCreate, _: bool = Depends(require_admin)):
-    with db.get_conn() as conn:
-        emp_id = db.next_employee_id(conn)
-        conn.execute(
-            """
-            INSERT INTO employees (id, name, department, role, email, phone, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (emp_id, *[security.encrypt_text(v) for v in (body.name, body.department, body.role, body.email, body.phone)], security.encrypt_text(db.now_str())),
-        )
+    emp_id = store.next_employee_id()
+    store.insert_employee(
+        {
+            "id": emp_id,
+            **{
+                key: security.encrypt_text(value)
+                for key, value in {
+                    "name": body.name,
+                    "department": body.department,
+                    "role": body.role,
+                    "email": body.email,
+                    "phone": body.phone,
+                }.items()
+            },
+            "created_at": security.encrypt_text(db.now_str()),
+        }
+    )
     new = {"id": emp_id, "name": body.name, "department": body.department,
            "role": body.role, "email": body.email, "phone": body.phone,
            "face_enrolled": False, "is_active": 1}
@@ -227,8 +241,7 @@ def create_employee(body: EmployeeCreate, _: bool = Depends(require_admin)):
 
 @app.get("/api/employees/{employee_id}")
 def get_employee(employee_id: str, _: bool = Depends(require_admin)):
-    with db.get_conn() as conn:
-        row = conn.execute("SELECT * FROM employees WHERE id = ?", (employee_id,)).fetchone()
+    row = store.get_employee(employee_id)
     if row is None:
         raise HTTPException(404, "Employee not found.")
     return public_employee(row)
@@ -236,24 +249,18 @@ def get_employee(employee_id: str, _: bool = Depends(require_admin)):
 
 @app.patch("/api/employees/{employee_id}")
 def update_employee(employee_id: str, body: EmployeeUpdate, _: bool = Depends(require_admin)):
-    with db.get_conn() as conn:
-        row = conn.execute("SELECT * FROM employees WHERE id = ?", (employee_id,)).fetchone()
-        if row is None:
-            raise HTTPException(404, "Employee not found.")
-        fields = body.model_dump(exclude_unset=True)
-        if not fields:
-            return dict(row)
-        sets, vals = [], []
-        for key, value in fields.items():
-            if key in {"name", "department", "role", "email", "phone"}:
-                value = security.encrypt_text(value)
-            sets.append(f"{key} = ?")
-            vals.append(value)
-        vals.append(employee_id)
-        conn.execute(f"UPDATE employees SET {', '.join(sets)} WHERE id = ?", vals)
-    with db.get_conn() as conn:
-        row = conn.execute("SELECT * FROM employees WHERE id = ?", (employee_id,)).fetchone()
-    return public_employee(row)
+    row = store.get_employee(employee_id)
+    if row is None:
+        raise HTTPException(404, "Employee not found.")
+    fields = body.model_dump(exclude_unset=True)
+    if not fields:
+        return public_employee(row)
+    sets = {}
+    for key, value in fields.items():
+        if key in {"name", "department", "role", "email", "phone"}:
+            value = security.encrypt_text(value)
+        sets[key] = value
+    return public_employee(store.update_employee(employee_id, sets))
 
 
 def _remove_face(label: int | None) -> None:
@@ -263,42 +270,38 @@ def _remove_face(label: int | None) -> None:
     if not faces_dir.exists():
         return
     for p in faces_dir.iterdir():
-        if p.is_file() and (p.stem == str(label) or p.stem.startswith(f"{label}.")):
+        if p.is_file() and p.stem in {str(label), f"{label}.0"}:
+            p.unlink(missing_ok=True)
+        elif p.is_file() and p.stem.startswith(f"{label}."):
+            p.unlink(missing_ok=True)
+        elif p.is_file() and p.stem.startswith(f"{label}-"):
             p.unlink(missing_ok=True)
 
 
 @app.delete("/api/employees/{employee_id}")
 def delete_employee(employee_id: str, _: bool = Depends(require_admin)):
-    with db.get_conn() as conn:
-        row = conn.execute("SELECT face_label FROM employees WHERE id = ?", (employee_id,)).fetchone()
-        label = row["face_label"] if row else None
-        conn.execute("DELETE FROM employees WHERE id = ?", (employee_id,))
-    _remove_face(label)
+    row = store.delete_employee(employee_id)
+    _remove_face(row["face_label"] if row else None)
     return {"deleted": employee_id}
 
 
+def _allocate_face_label(employee_id: str) -> int:
+    row = store.get_employee(employee_id)
+    if row is None:
+        raise HTTPException(404, "Employee not found.")
+    label = row["face_label"]
+    if label is None:
+        label = (store.max_face_label() or 0) + 1
+        store.set_face_label(employee_id, label)
+    return label
+
+
 def _enroll_face(employee_id: str, frame):
-    with db.get_conn() as conn:
-        row = conn.execute("SELECT * FROM employees WHERE id = ?", (employee_id,)).fetchone()
-        if row is None:
-            raise HTTPException(404, "Employee not found.")
-        label = row["face_label"]
-        if label is None:
-            max_label = conn.execute(
-                "SELECT MAX(face_label) AS m FROM employees"
-            ).fetchone()["m"]
-            label = (max_label or 0) + 1
-            conn.execute(
-                "UPDATE employees SET face_label = ? WHERE id = ?", (label, employee_id)
-            )
-        conn.commit()
+    label = _allocate_face_label(employee_id)
     ok = engine.enroll(label, frame)
     if not ok:
         raise HTTPException(400, "No face detected in the provided image.")
-    with db.get_conn() as conn:
-        conn.execute(
-            "UPDATE employees SET face_available = 1 WHERE id = ?", (employee_id,)
-        )
+    store.set_face_available(employee_id, 1)
 
 
 @app.post("/api/employees/{employee_id}/face")
@@ -310,13 +313,44 @@ async def enroll_face(employee_id: str, file: UploadFile | None = File(None), _:
     return {"detail": "Face enrolled."}
 
 
+@app.post("/api/employees/{employee_id}/face/upload")
+async def upload_enrollment_face(
+    employee_id: str,
+    files: list[UploadFile] = File(...),
+    _: bool = Depends(require_admin),
+):
+    """First-enrollment only: enroll a new face from uploaded picture(s).
+
+    Upload is deliberately refused once a face exists, so the trusted live
+    camera path is used for re-enrolments instead.
+    """
+    row = store.get_employee(employee_id)
+    if row is None:
+        raise HTTPException(404, "Employee not found.")
+    if row["face_available"]:
+        raise HTTPException(
+            409,
+            "Face already enrolled — pictures can only be used for the first enrollment.",
+        )
+    if not files:
+        raise HTTPException(400, "Provide at least one picture.")
+    frames = []
+    for upload in files:
+        frame = _decode_image(None, upload)
+        if frame is not None:
+            frames.append(frame)
+    if not frames:
+        raise HTTPException(400, "None of the provided pictures could be read.")
+    label = _allocate_face_label(employee_id)
+    if not engine.enroll_many(label, frames):
+        raise HTTPException(400, "No face detected in the provided pictures.")
+    store.set_face_available(employee_id, 1)
+    return {"detail": f"Enrolled {len(frames)} picture(s) for {employee_id}.", "face_enrolled": True}
+
+
 @app.get("/api/employees/{employee_id}/face")
 def face_status(employee_id: str, _: bool = Depends(require_admin)):
-    with db.get_conn() as conn:
-        row = conn.execute(
-            "SELECT face_available, face_label FROM employees WHERE id = ?",
-            (employee_id,),
-        ).fetchone()
+    row = store.get_employee(employee_id)
     if row is None:
         raise HTTPException(404, "Employee not found.")
     return {"employee_id": employee_id, "face_enrolled": bool(row["face_available"])}
@@ -324,12 +358,10 @@ def face_status(employee_id: str, _: bool = Depends(require_admin)):
 
 @app.get("/api/departments")
 def departments(_: bool = Depends(require_admin)):
-    with db.get_conn() as conn:
-        rows = conn.execute("SELECT department FROM employees").fetchall()
     counts = {}
-    for row in rows:
-        department = security.decrypt_text(row["department"]) or "General"
-        counts[department] = counts.get(department, 0) + 1
+    for department in store.departments():
+        name = security.decrypt_text(department) or "General"
+        counts[name] = counts.get(name, 0) + 1
     return [{"department": department, "count": count} for department, count in counts.items()]
 
 
@@ -337,27 +369,26 @@ def departments(_: bool = Depends(require_admin)):
 # Attendance
 # --------------------------------------------------------------------------
 @app.post("/api/attendance/scan")
-def scan_attendance(body: ScanRequest):
+def scan_attendance(body: ScanRequest, request: Request):
     """Auto check-in / check-out driven by a recognised face."""
+    client = request.client.host if request.client else "unknown"
+    allowed, retry_after = scan_limiter.check(client)
+    if not allowed:
+        return JSONResponse(
+            {"action": "RATE_LIMITED", "message": "Too many scans. Please wait a moment."},
+            status_code=429,
+            headers={"Retry-After": str(retry_after)},
+        )
     if engine.name == "opencv":
         frame = _decode_image(body.image)
         if frame is None:
             raise HTTPException(400, "No image frame provided.")
-        with db.get_conn() as conn:
-            candidates = [
-                r["face_label"]
-                for r in conn.execute(
-                    "SELECT face_label FROM employees WHERE is_active = 1 AND face_label IS NOT NULL"
-                ).fetchall()
-            ]
-        result = engine.recognize(frame, candidates=candidates)
+        result = engine.recognize(frame, candidates=store.active_face_labels())
         if result is None:
             return JSONResponse({"action": "UNKNOWN", "message": "Face not recognised."})
-        label = result[0]
-        with db.get_conn() as conn:
-            emp = conn.execute(
-                "SELECT * FROM employees WHERE face_label = ?", (label,)
-            ).fetchone()
+        emp = store.get_employee_by_face_label(result[0])
+        if emp is None:
+            return JSONResponse({"action": "UNKNOWN", "message": "Face not recognised."})
         employee_id = emp["id"]
     else:
         raise HTTPException(503, "Face recognition is unavailable; public scanning is disabled.")
@@ -405,10 +436,15 @@ if FRONTEND_DIST.exists():
 
     @app.get("/{full_path:path}", include_in_schema=False)
     def _spa(full_path: str):
-        candidate = FRONTEND_DIST / full_path
-        if full_path and candidate.is_file():
-            return FileResponse(candidate)
-        return FileResponse(FRONTEND_DIST / "index.html")
+        root = FRONTEND_DIST.resolve()
+        if full_path:
+            try:
+                candidate = (root / full_path).resolve()
+            except Exception:
+                candidate = root
+            if (candidate == root or root in candidate.parents) and candidate.is_file():
+                return FileResponse(candidate)
+        return FileResponse(root / "index.html")
 
 
 def run() -> None:
