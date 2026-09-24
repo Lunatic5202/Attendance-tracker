@@ -133,7 +133,7 @@ export default function Scan() {
           <div className={`result-card ${meta.cls}`}>
             <div className="rc-top">
               <span className="rc-flag">{meta.label}</span>
-              <span className="rc-time">{last ? last.time : star()}</span>
+              <span className="rc-time">{last ? fmtTime(last.time) : star()}</span>
             </div>
 
             {last?.employee ? (

@@ -70,9 +70,11 @@ export const api = {
 export function fmtTime(hhmmss) {
   if (!hhmmss) return '—'
   const [h, m] = hhmmss.split(':').map(Number)
-  const am = h < 12
-  const hr = h % 12 || 12
-  return `${hr}:${String(m).padStart(2, '0')} ${am ? 'AM' : 'PM'}`
+  // Backend stores times in UTC ("HH:MM" / "HH:MM:SS"). Anchor at a fixed
+  // UTC instant, then let the runtime render it in the viewer's local zone.
+  // (Handles +5:30, +5:45, DST — any offset a browser can produce.)
+  const t = new Date(Date.UTC(2000, 0, 1, h, m))
+  return t.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
 }
 
 export function today() {

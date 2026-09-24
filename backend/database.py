@@ -100,7 +100,7 @@ def next_employee_id(conn: sqlite3.Connection) -> str:
 
 
 def now_str() -> str:
-    return datetime.now().strftime("%H:%M:%S")
+    return datetime.now(timezone.utc).strftime("%H:%M:%S")
 
 
 def today_str() -> str:
