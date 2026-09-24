@@ -22,6 +22,7 @@ DATA_DIR = Path(os.getenv("ATTENDANCE_DATA", "data"))
 FACES_DIR = DATA_DIR / "faces"
 MODEL_PATH = FACES_DIR / "recognizer.yml"
 CASCADE_PATH = FACES_DIR / "haarcascade_frontalface_default.xml"
+VENDORED_CASCADE = Path(__file__).parent / "face_recognition_data" / "haarcascade_frontalface_default.xml"
 
 
 def _installed() -> bool:
@@ -80,8 +81,16 @@ class OpenCVFaceEngine:
         import cv2  # noqa: WPS433 (imported lazily on purpose)
 
         self.cv2 = cv2
-        cascade = str(CASCADE_PATH) if CASCADE_PATH.exists() else None
-        if cascade is None and hasattr(cv2, "data"):
+        cascade = None
+        # 1) repo-vendored copy baked into the image (reliable on every host,
+        #    including minimal opencv wheels that drop cv2.data.haarcascades).
+        if VENDORED_CASCADE.exists():
+            cascade = str(VENDORED_CASCADE)
+        # 2) runtime data dir copy (first enroll writes it there too).
+        elif CASCADE_PATH.exists():
+            cascade = str(CASCADE_PATH)
+        # 3) the wheel's bundled data dir.
+        elif hasattr(cv2, "data"):
             cascade = os.path.join(cv2.data.haarcascades, "haarcascade_frontalface_default.xml")
         self.detector = cv2.CascadeClassifier(cascade)
         if self.detector.empty():
