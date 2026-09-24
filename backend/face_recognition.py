@@ -95,7 +95,7 @@ class OpenCVFaceEngine:
         self.detector = cv2.CascadeClassifier(cascade)
         if self.detector.empty():
             raise RuntimeError("Haar cascade classifier failed to load.")
-        self.confidence_threshold = float(os.getenv("FACE_CONFIDENCE", "95"))
+        self.confidence_threshold = float(os.getenv("FACE_CONFIDENCE", "120"))
         self._model = None
         self._model_sig = None
         FACES_DIR.mkdir(parents=True, exist_ok=True)
@@ -258,11 +258,20 @@ class OpenCVFaceEngine:
         if model is None:
             return None
         label, confidence = model.predict(face)
-        if confidence > self.confidence_threshold:
-            return None
-        if candidates is not None and label not in candidates:
-            return None
-        return int(label), float(confidence)
+        decided = (
+            (label, float(confidence))
+            if confidence <= self.confidence_threshold
+            and (candidates is None or label in candidates)
+            else None
+        )
+        log.info(
+            "scan decision: label=%s distance=%.1f threshold=%.1f -> %s",
+            label,
+            confidence,
+            self.confidence_threshold,
+            "MATCH" if decided else "REJECT",
+        )
+        return decided
 
 
 engine = build_engine()
