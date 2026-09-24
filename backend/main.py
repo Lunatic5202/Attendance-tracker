@@ -23,7 +23,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from backend import attendance, database as db, security
+from backend import attendance, backup_sync, database as db, excel_sync, onedrive, scheduler, security
 from backend.attendance import AttendanceError
 from backend.face_recognition import engine
 from backend.limits import scan_limiter
@@ -72,6 +72,7 @@ async def _cache_headers(request: Request, call_next):
 @app.on_event("startup")
 def _startup() -> None:
     store.init()
+    scheduler.spawn()
 
 
 # --------------------------------------------------------------------------
@@ -422,6 +423,43 @@ def get_attendance(date: str | None = Query(None), employee_id: str | None = Non
 @app.get("/api/stats")
 def stats(date: str | None = None, _: bool = Depends(require_admin)):
     return attendance.summary(date)
+
+
+# --------------------------------------------------------------------------
+# Microsoft 365 sync (Excel export + encrypted data backups)
+# --------------------------------------------------------------------------
+@app.get("/api/excel/status")
+def excel_status(_: bool = Depends(require_admin)):
+    return {
+        "configured": onedrive.configured(),
+        "sync_time": scheduler.ms_sync_time(),
+        "folder": os.getenv("MS_FOLDER", "Attendance Tracker"),
+        "filename": os.getenv("MS_EXCEL_FILENAME", "Attendance.xlsx"),
+        "excel_enabled": scheduler.excel_enabled(),
+        "backup_enabled": scheduler.backup_enabled(),
+    }
+
+
+@app.post("/api/excel/sync")
+def excel_sync_now(_: bool = Depends(require_admin)):
+    try:
+        result = excel_sync.sync_to_excel()
+    except onedrive.OneDriveError as exc:
+        raise HTTPException(502, str(exc))
+    if result.get("disabled"):
+        raise HTTPException(503, result.get("reason", "Microsoft sync is not configured."))
+    return result
+
+
+@app.post("/api/backup/now")
+def backup_now(_: bool = Depends(require_admin)):
+    try:
+        result = backup_sync.run_backup()
+    except onedrive.OneDriveError as exc:
+        raise HTTPException(502, str(exc))
+    if result.get("disabled"):
+        raise HTTPException(503, result.get("reason", "Backup is not configured."))
+    return result
 
 
 # --------------------------------------------------------------------------

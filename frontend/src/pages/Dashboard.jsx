@@ -1,12 +1,15 @@
 import React, { useEffect, useState } from 'react'
 import { api, fmtTime, today } from '../api'
 import { navigate } from '../App'
+import { toast } from '../components/Toast'
 
 export default function Dashboard() {
   const [stats, setStats] = useState(null)
   const [rows, setRows] = useState([])
   const [date, setDate] = useState(today())
   const [loading, setLoading] = useState(true)
+  const [msync, setMsync] = useState(null)
+  const [syncing, setSyncing] = useState(false)
 
   function load(nextDate) {
     setLoading(true)
@@ -16,6 +19,22 @@ export default function Dashboard() {
   }
 
   useEffect(() => load(date), [date]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { api.excelStatus().then(setMsync).catch(() => setMsync(null)) }, [])
+
+  function runSync(kind) {
+    setSyncing(true)
+    const call = kind === 'excel' ? api.excelSync() : api.backupNow()
+    call
+      .then((res) => {
+        const msg = kind === 'excel'
+          ? `Excel updated — ${res.attendance_rows ?? 0} attendance rows`
+          : `Encrypted backup saved — ${res.filename}`
+        toast(msg, { ok: true })
+        api.excelStatus().then(setMsync).catch(() => setMsync(null))
+      })
+      .catch((err) => toast(err.message || 'Sync failed'))
+      .finally(() => setSyncing(false))
+  }
 
   const maxDept = stats ? Math.max(1, ...Object.values(stats.departments || {})) : 1
 
@@ -128,6 +147,41 @@ export default function Dashboard() {
               </table>
             </div>
           )}
+
+          <div className="sec-head" style={{ marginTop: '2rem' }}>
+            <span className="idx">VIEW 03</span>
+            <h2>Excel & Backup Sync</h2>
+          </div>
+          <div className="card">
+            <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center', gap: '1rem', flexWrap: 'wrap' }}>
+              <div>
+                {msync?.configured ? (
+                  <>
+                    <div className="strong-cell">Microsoft OneDrive connected</div>
+                    <div className="muted-cell" style={{ marginTop: '0.2rem' }}>
+                      daily sync {msync.sync_time?.slice(0, 5)} · {msync.folder}/{msync.filename}
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="strong-cell">Microsoft sync not configured</div>
+                    <div className="muted-cell" style={{ marginTop: '0.2rem' }}>
+                      Set MS_CLIENT_ID / MS_CLIENT_SECRET / MS_TENANT_ID / MS_DRIVE_UPN to push the
+                      attendance workbook to Excel and encrypted backups to OneDrive.
+                    </div>
+                  </>
+                )}
+              </div>
+              <div className="row">
+                <button className="btn sm" disabled={syncing} onClick={() => runSync('excel')}>
+                  Sync to Excel
+                </button>
+                <button className="btn sm ghost" disabled={syncing} onClick={() => runSync('backup')}>
+                  Encrypted Backup
+                </button>
+              </div>
+            </div>
+          </div>
 
           <div className="row" style={{ marginTop: '1.6rem' }}>
             <button className="btn" onClick={() => navigate('scan')}>Open Live Scan →</button>

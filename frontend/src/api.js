@@ -61,6 +61,10 @@ export const api = {
   },
   stats: (date) => req(`/stats${date ? `?date=${date}` : ''}`),
   departments: () => req('/departments'),
+
+  excelStatus: () => req('/excel/status'),
+  excelSync: () => req('/excel/sync', { method: 'POST' }),
+  backupNow: () => req('/backup/now', { method: 'POST' }),
 }
 
 export function fmtTime(hhmmss) {

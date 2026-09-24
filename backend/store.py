@@ -204,6 +204,19 @@ def _attendance_by_employee(conn, employee_id: str, limit: int = 60) -> list[dic
     return [dict(r) for r in rows]
 
 
+def _attendance_all(conn, limit: int) -> list[dict]:
+    rows = conn.execute(
+        """
+        SELECT a.*, e.name, e.department, e.role
+        FROM attendance a JOIN employees e ON e.id = a.employee_id
+        ORDER BY a.date ASC, a.check_in ASC, e.name ASC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
 def _attendance_date_rows(conn, date: str) -> list[dict]:
     rows = conn.execute(
         "SELECT check_in, check_out, hours, status FROM attendance WHERE date = ?", (date,)
@@ -340,6 +353,10 @@ class SQLiteStore(Store):
     def attendance_date_rows(self, date: str) -> list[dict]:
         with db.get_conn() as conn:
             return _attendance_date_rows(conn, date)
+
+    def attendance_all(self, limit: int = 5000) -> list[dict]:
+        with db.get_conn() as conn:
+            return _attendance_all(conn, limit)
 
 
 store: Store = SQLiteStore()

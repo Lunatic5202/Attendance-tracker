@@ -1,0 +1,46 @@
+services:
+  - type: web
+    name: attendance-tracker
+    runtime: docker
+    plan: free            # paid plans needed for a persistent disk
+    region: oregon        # change to nearest: oregon, ohio, virginia, frankfurt, singapore
+    repo: https://github.com/Lunatic5202/Attendance-tracker
+    branch: main
+    healthCheckPath: /api/health
+    dockerfilePath: ./Dockerfile
+    autoDeploy: true
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: ADMIN_PASSWORD
+        sync: false       # prompts once at creation
+      - key: ATTENDANCE_MASTER_KEY
+        sync: false       # prompts once at creation; do not rotate after data exists
+      - key: ALLOWED_ORIGINS
+        sync: false
+      - key: MIN_CHECKOUT_HOURS
+        value: "4"
+      - key: ADMIN_SESSION_TTL
+        value: "28800"
+      - key: SCAN_RATE_LIMIT
+        value: "10"
+      - key: SCAN_RATE_WINDOW
+        value: "60"
+
+      # --- Microsoft 365 / Excel + backup sync (optional) ---
+      - key: MS_CLIENT_ID
+        sync: false       # Entra app (client) ID
+      - key: MS_CLIENT_SECRET
+        sync: false       # Entra app client secret
+      - key: MS_TENANT_ID
+        sync: false       # Entra directory (tenant) ID
+      - key: MS_DRIVE_UPN
+        sync: false       # email that owns the target OneDrive for Business drive
+      - key: MS_FOLDER
+        value: Attendance Tracker
+      - key: MS_EXCEL_FILENAME
+        value: Attendance.xlsx
+      - key: MS_SYNC_TIME
+        value: "23:30"    # daily sync time (UTC)
+      - key: MS_BACKUP_KEEP
+        value: "14"

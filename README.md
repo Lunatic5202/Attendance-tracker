@@ -335,6 +335,52 @@ The tracker has exactly two experiences, so nothing depends on employees remembe
 
 ---
 
+## 📊 Microsoft 365 / Excel Sync + Encrypted Backup *(optional)*
+
+Push attendance records to a real **Excel** workbook in **OneDrive for Business** every day, and take **encrypted backups** of the whole database (including face templates) so data survives cloud restarts.
+
+* Requires a **Microsoft 365 work/school account** (e.g. Business Basic) — the consumer `@outlook.com` plan does **not** expose the Excel/OneDrive APIs.
+* Uses **app-only (client credentials)** auth via an Entra ID app, so no refresh token is stored on the server (important on ephemeral cloud disk).
+* **Face templates never leave the server unencrypted** — they stay Fernet-encrypted under `ATTENDANCE_MASTER_KEY`. Excel only ever receives the *attendance records* and an *employee roster* (with a "Face Enrolled" yes/no column). The daily backup archive is the only place full face data goes, and it is encrypted a second time before upload.
+
+### Where to get the API keys (one-time, ~10 min)
+
+1. Sign in to [portal.azure.com](https://portal.azure.com) with your **Microsoft 365 admin/owner** account.
+2. **Microsoft Entra ID → App registrations → New registration**:
+   * Name: `Attendance Tracker`
+   * *Supported account types*: **Accounts in this organizational directory only**
+   * Register.
+3. On the app's **Overview** page copy:
+   * **Application (client) ID** → `MS_CLIENT_ID`
+   * **Directory (tenant) ID** → `MS_TENANT_ID`
+4. **Certificates & secrets → Client secrets → New client secret** → copy the **Value** immediately → `MS_CLIENT_SECRET`.
+5. **API permissions → Add a permission → Microsoft Graph → Application permissions** → add **`Files.ReadWrite.All`** → **Grant admin consent** (you are the admin, so it applies instantly).
+6. `MS_DRIVE_UPN` = the **email/UPN** of the OneDrive for Business account that should receive the exports (e.g. `you@yourcompany.com`). That user just needs a normal Business Basic license.
+
+### Environment variables
+
+| Variable             | Purpose                                             | Example |
+| -------------------- | --------------------------------------------------- | ------- |
+| `MS_CLIENT_ID`       | Entra app (client) ID (step 3)                      | `62cd…` |
+| `MS_CLIENT_SECRET`   | Entra app client secret (step 4)                    | `abc…`  |
+| `MS_TENANT_ID`       | Entra directory (tenant) ID (step 3)                | `e1d…`  |
+| `MS_DRIVE_UPN`       | OneDrive owner's email (step 6)                     | `owner@company.com` |
+| `MS_FOLDER`          | OneDrive folder for workbook + backups              | `Attendance Tracker` |
+| `MS_EXCEL_FILENAME`  | Excel workbook name                                 | `Attendance.xlsx` |
+| `MS_SYNC_TIME`       | Daily sync time in **UTC** (`HH:MM`)                | `23:30` |
+| `MS_BACKUP_KEEP`     | Encrypted backups to keep (older ones pruned)       | `14` |
+| `MS_EXCEL_ENABLED`   | Set `0` to disable the Excel push only              | `1` |
+| `MS_BACKUP_ENABLED`  | Set `0` to disable the encrypted backup only        | `1` |
+
+### How it works
+
+* A background task runs once per day at `MS_SYNC_TIME` (UTC) and once shortly after every boot.
+* **Excel sync** regenerates a full `.xlsx` (sheets: `Summary`, `Attendance`, `Employees`) and overwrites `MS_FOLDER/MS_EXCEL_FILENAME` in the owner's OneDrive. It is one-way — edits you make in Excel are overwritten on the next push.
+* **Encrypted backup** snapshots the SQLite DB (consistently, via the sqlite backup API), bundles it with the face-template files, encrypts the whole archive with `ATTENDANCE_MASTER_KEY` via Fernet, and uploads to `MS_FOLDER/backups/`. Old backups are pruned to `MS_BACKUP_KEEP`.
+* The admin dashboard shows connection status and **Sync to Excel** / **Encrypted Backup** buttons (`POST /api/excel/sync`, `POST /api/backup/now`).
+
+---
+
 ## 🛡️ Anti-Spoofing
 
 A future version will include **liveness detection** to reduce attempts to authenticate using:

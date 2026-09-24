@@ -4,3 +4,6 @@ numpy>=1.26
 python-multipart>=0.0.9
 cryptography>=42.0
 opencv-contrib-python>=4.9
+msal>=1.27
+openpyxl>=3.1
+requests>=2.31
