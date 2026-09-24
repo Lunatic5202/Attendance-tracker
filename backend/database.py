@@ -6,7 +6,7 @@ beyond FastAPI. In production this can be swapped for PostgreSQL.
 
 import os
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone, timezone
 
 from backend.security import encrypt_text
 
