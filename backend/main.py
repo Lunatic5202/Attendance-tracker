@@ -24,6 +24,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from backend import attendance, backup_sync, database as db, excel_sync, onedrive, scheduler, security
+from backend import seed_data
 from backend.attendance import AttendanceError
 from backend.face_recognition import engine
 from backend.limits import scan_limiter
@@ -72,6 +73,7 @@ async def _cache_headers(request: Request, call_next):
 @app.on_event("startup")
 def _startup() -> None:
     store.init()
+    seed_data.seed_employees(engine)
     scheduler.spawn()
 
 
@@ -372,7 +374,7 @@ def departments(_: bool = Depends(require_admin)):
 @app.post("/api/attendance/scan")
 def scan_attendance(body: ScanRequest, request: Request):
     """Auto check-in / check-out driven by a recognised face."""
-    client = request.client.host if request.client else "unknown"
+    client = _client_identity(request)
     allowed, retry_after = scan_limiter.check(client)
     if not allowed:
         return JSONResponse(
