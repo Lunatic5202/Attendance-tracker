@@ -159,7 +159,12 @@ def require_admin(admin_cookie: str | None = Cookie(None, alias=SESSION_COOKIE))
 # --------------------------------------------------------------------------
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "face_engine": engine.name, **security_status()}
+    return {
+        "status": "ok",
+        "face_engine": engine.name,
+        "database": "postgres" if db.using_postgres() else "sqlite",
+        **security_status(),
+    }
 
 
 @app.post("/api/admin/login")

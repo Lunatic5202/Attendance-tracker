@@ -1,91 +1,237 @@
-"""SQLite persistence layer for the attendance tracker.
+"""Persistence layer for the attendance tracker.
 
-Uses only the standard library so the backend runs with zero extra deps
-beyond FastAPI. In production this can be swapped for PostgreSQL.
+SQLite is the default so local development and the test suite need no external
+service. Set ``DATABASE_URL`` to a PostgreSQL connection string to run against
+PostgreSQL instead. The rest of the backend is written against the small
+sqlite3-compatible surface returned by :func:`get_conn`, so both engines share
+the same queries.
 """
 
 import os
 import sqlite3
-from datetime import datetime, timezone, timezone
+from datetime import datetime, timezone
 
 from backend.security import encrypt_text
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(BASE_DIR, "data")
 DB_PATH = os.getenv("ATTENDANCE_DB", os.path.join(DATA_DIR, "attendance.db"))
+DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
+
+_POSTGRES_PREFIXES = ("postgres://", "postgresql://")
+_POOL = None
+
+_LEGACY_TABLES = (
+    ("employees", ("name", "department", "role", "email", "phone", "created_at")),
+    ("attendance", ("check_in", "check_out", "created_at")),
+)
 
 
-def get_conn() -> sqlite3.Connection:
-    """Return a connection (row factory enabled) to the SQLite database."""
+def using_postgres() -> bool:
+    """True when a PostgreSQL connection string was configured."""
+    return DATABASE_URL.startswith(_POSTGRES_PREFIXES)
+
+
+def _rewrite_placeholders(sql: str, format_placeholder) -> str:
+    """Rewrite qmark placeholders, leaving quoted text and comments alone."""
+    out = []
+    index = 0
+    length = len(sql)
+    count = 0
+    while index < length:
+        char = sql[index]
+        if char == "'":
+            end = index + 1
+            while end < length:
+                if sql[end] == "'":
+                    if sql[end + 1 : end + 2] == "'":
+                        end += 2
+                        continue
+                    break
+                end += 1
+            out.append(sql[index : end + 1])
+            index = end + 1
+        elif char == '"':
+            end = sql.find('"', index + 1)
+            end = length - 1 if end == -1 else end
+            out.append(sql[index : end + 1])
+            index = end + 1
+        elif sql.startswith("--", index):
+            end = sql.find("\n", index)
+            end = length if end == -1 else end
+            out.append(sql[index:end])
+            index = end
+        elif sql.startswith("/*", index):
+            end = sql.find("*/", index)
+            end = length if end == -1 else end + 2
+            out.append(sql[index:end])
+            index = end
+        elif char == "?":
+            count += 1
+            out.append(format_placeholder(count))
+            index += 1
+        else:
+            out.append(char)
+            index += 1
+    return "".join(out)
+
+
+def _translate_placeholders(sql: str) -> str:
+    """Rewrite qmark placeholders as the pyformat form psycopg expects."""
+    return _rewrite_placeholders(sql, lambda _index: "%s")
+
+
+class PostgresConnection:
+    """sqlite3-compatible connection backed by a psycopg connection."""
+
+    def __init__(self, conn, pool=None):
+        self._conn = conn
+        self._pool = pool
+
+    def execute(self, sql, params=()):
+        from psycopg.rows import dict_row
+
+        cursor = self._conn.cursor(row_factory=dict_row)
+        cursor.execute(_translate_placeholders(sql), tuple(params))
+        return cursor
+
+    def commit(self) -> None:
+        self._conn.commit()
+
+    def rollback(self) -> None:
+        self._conn.rollback()
+
+    def close(self) -> None:
+        if self._pool is not None:
+            self._pool.putconn(self._conn)
+        else:
+            self._conn.close()
+
+    def __enter__(self) -> "PostgresConnection":
+        return self
+
+    def __exit__(self, exc_type, *_exc) -> None:
+        try:
+            if exc_type is None:
+                self._conn.commit()
+            else:
+                self._conn.rollback()
+        finally:
+            self.close()
+
+
+def _pool():
+    global _POOL
+    if _POOL is None:
+        from psycopg_pool import ConnectionPool
+
+        _POOL = ConnectionPool(
+            DATABASE_URL,
+            min_size=0,
+            max_size=int(os.getenv("PG_POOL_MAX", "5")),
+            open=True,
+        )
+    return _POOL
+
+
+def get_conn():
+    """Return a connection to the configured engine."""
+    if using_postgres():
+        pool = _pool()
+        return PostgresConnection(pool.getconn(), pool)
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
 
+def _schema() -> list[str]:
+    """Return the DDL statements for the configured engine."""
+    if using_postgres():
+        identity = "BIGINT GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY"
+        hours_type = "DOUBLE PRECISION"
+    else:
+        identity = "INTEGER PRIMARY KEY AUTOINCREMENT"
+        hours_type = "REAL"
+    return [
+        f"""
+        CREATE TABLE IF NOT EXISTS employees (
+            id            TEXT PRIMARY KEY,
+            name          TEXT NOT NULL,
+            department    TEXT NOT NULL DEFAULT 'General',
+            role          TEXT NOT NULL DEFAULT '',
+            email         TEXT NOT NULL DEFAULT '',
+            phone         TEXT NOT NULL DEFAULT '',
+            face_label    INTEGER UNIQUE,
+            face_available INTEGER NOT NULL DEFAULT 0,
+            is_active     INTEGER NOT NULL DEFAULT 1,
+            created_at    TEXT NOT NULL
+        )
+        """,
+        f"""
+        CREATE TABLE IF NOT EXISTS attendance (
+            id          {identity},
+            employee_id TEXT NOT NULL,
+            date        TEXT NOT NULL,
+            check_in    TEXT,
+            check_out   TEXT,
+            hours       {hours_type} NOT NULL DEFAULT 0,
+            status      TEXT NOT NULL DEFAULT 'Present',
+            source      TEXT NOT NULL DEFAULT 'face',
+            created_at  TEXT NOT NULL,
+            UNIQUE(employee_id, date),
+            FOREIGN KEY (employee_id) REFERENCES employees(id) ON DELETE CASCADE
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_attendance_date ON attendance(date)",
+        "CREATE INDEX IF NOT EXISTS idx_attendance_employee ON attendance(employee_id)",
+    ]
+
+
 def init_db() -> None:
     """Create tables if they do not exist."""
-    os.makedirs(DATA_DIR, exist_ok=True)
+    if not using_postgres():
+        os.makedirs(DATA_DIR, exist_ok=True)
     with get_conn() as conn:
-        conn.executescript(
-            """
-            CREATE TABLE IF NOT EXISTS employees (
-                id            TEXT PRIMARY KEY,
-                name          TEXT NOT NULL,
-                department    TEXT NOT NULL DEFAULT 'General',
-                role          TEXT NOT NULL DEFAULT '',
-                email         TEXT NOT NULL DEFAULT '',
-                phone         TEXT NOT NULL DEFAULT '',
-                face_label    INTEGER UNIQUE,
-                face_available INTEGER NOT NULL DEFAULT 0,
-                is_active     INTEGER NOT NULL DEFAULT 1,
-                created_at    TEXT NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS attendance (
-                id          INTEGER PRIMARY KEY AUTOINCREMENT,
-                employee_id TEXT NOT NULL,
-                date        TEXT NOT NULL,
-                check_in    TEXT,
-                check_out   TEXT,
-                hours       REAL NOT NULL DEFAULT 0,
-                status      TEXT NOT NULL DEFAULT 'Present',
-                source      TEXT NOT NULL DEFAULT 'face',
-                created_at  TEXT NOT NULL,
-                UNIQUE(employee_id, date),
-                FOREIGN KEY (employee_id) REFERENCES employees(id) ON DELETE CASCADE
-            );
-
-            CREATE INDEX IF NOT EXISTS idx_attendance_date ON attendance(date);
-            CREATE INDEX IF NOT EXISTS idx_attendance_employee ON attendance(employee_id);
-            """
-        )
+        for statement in _schema():
+            conn.execute(statement)
         _migrate_legacy_plaintext(conn)
 
 
-def _migrate_legacy_plaintext(conn: sqlite3.Connection) -> None:
+def _migrate_legacy_plaintext(conn) -> None:
     """Encrypt records written by pre-security versions.
 
     Old builds stored profile fields and timestamps as plaintext. New writes
     always encrypt them, so any value without the ``v1:`` ciphertext marker is
     an unencrypted legacy value and is encrypted in place with the current key.
     """
-    for table, fields in (
-        ("employees", ("name", "department", "role", "email", "phone", "created_at")),
-        ("attendance", ("check_in", "check_out", "created_at")),
-    ):
+    for table, fields in _LEGACY_TABLES:
         columns = ", ".join(fields)
-        rows = conn.execute(f"SELECT rowid, {columns} FROM {table}").fetchall()
+        rows = conn.execute(f"SELECT id, {columns} FROM {table}").fetchall()
         for row in rows:
-            changes = [(f, encrypt_text(str(row[f]))) for f in fields if row[f] and not str(row[f]).startswith("v1:")]
+            changes = [
+                (field, encrypt_text(str(row[field])))
+                for field in fields
+                if row[field] and not str(row[field]).startswith("v1:")
+            ]
             if not changes:
                 continue
             sets = ", ".join(f"{field} = ?" for field, _ in changes)
-            values = [value for _, value in changes] + [row["rowid"]]
-            conn.execute(f"UPDATE {table} SET {sets} WHERE rowid = ?", values)
+            values = [value for _, value in changes] + [row["id"]]
+            conn.execute(f"UPDATE {table} SET {sets} WHERE id = ?", values)
 
 
-def next_employee_id(conn: sqlite3.Connection) -> str:
+def export_snapshot() -> dict:
+    """Return the stored rows of every table, for backups."""
+    snapshot = {}
+    with get_conn() as conn:
+        for table, _fields in _LEGACY_TABLES:
+            rows = conn.execute(f"SELECT * FROM {table}").fetchall()
+            snapshot[table] = [dict(row) for row in rows]
+    return snapshot
+
+
+def next_employee_id(conn) -> str:
     """Generate the next sequential employee id (EMP###)."""
     row = conn.execute(
         "SELECT id FROM employees ORDER BY id DESC LIMIT 1"

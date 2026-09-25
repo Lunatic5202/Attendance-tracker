@@ -2,7 +2,7 @@ services:
   - type: web
     name: attendance-tracker
     runtime: docker
-    plan: free            # paid plans needed for a persistent disk
+    plan: free            # data lives in Postgres (DATABASE_URL), not the container disk
     region: oregon        # change to nearest: oregon, ohio, virginia, frankfurt, singapore
     repo: https://github.com/Lunatic5202/Attendance-tracker
     branch: main
@@ -12,6 +12,10 @@ services:
     envVars:
       - key: ENVIRONMENT
         value: production
+      - key: DATABASE_URL
+        sync: false       # PostgreSQL pooled connection string; attendance survives deploys
+      - key: PG_POOL_MAX
+        value: "5"
       - key: ADMIN_PASSWORD
         sync: false       # prompts once at creation
       - key: ATTENDANCE_MASTER_KEY

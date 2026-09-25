@@ -13,6 +13,7 @@ Features:
 from __future__ import annotations
 
 import io
+import json
 import logging
 import os
 import sqlite3
@@ -36,7 +37,12 @@ def _archive_bytes() -> bytes:
 
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
-        if db_path.exists():
+        if db.using_postgres():
+            payload = json.dumps(db.export_snapshot(), indent=2, default=str).encode()
+            info = tarfile.TarInfo("attendance-data.json")
+            info.size = len(payload)
+            archive.addfile(info, io.BytesIO(payload))
+        elif db_path.exists():
             temp_path = None
             try:
                 fd, temp_path = tempfile.mkstemp(prefix="attendance-db-", suffix=".db")

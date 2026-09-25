@@ -126,7 +126,8 @@ Employees do not need to manually select **Check In** or **Check Out**.
 
 ### Database
 
-* **SQLite** (single-file, zero-config — recommended for office kiosk deployments)
+* **PostgreSQL** — set `DATABASE_URL`. Required for ephemeral hosts (Render free, Heroku, most PaaS) because the container filesystem is wiped on every deploy, which deletes local data.
+* **SQLite** (default) — single-file, zero-config. Fine for a kiosk that runs on a machine you control, where the data directory persists on its own.
 
 ### Frontend
 
@@ -332,6 +333,28 @@ The tracker has exactly two experiences, so nothing depends on employees remembe
 4. Open the app, go to **Employees → Register Employee**, add each person, and **Enroll** their face from the admin console. Verify one real check-in followed by an early rejected check-out before opening the kiosk to staff.
 
 > The app reads `.env` automatically at startup. After changing `.env`, restart the service.
+
+### Using PostgreSQL
+
+Hosting providers with an ephemeral filesystem (Render's free tier, Heroku, and
+most other PaaS) delete the container on every deploy, so the default SQLite file
+is lost each time. Point `DATABASE_URL` at a managed PostgreSQL database and the
+attendance history survives redeploys.
+
+1. Create a free database (for example Neon or Supabase) and copy its
+   **pooled** connection string — the one ending in `-pooler`. The app holds a
+   small connection pool open, so the pooled endpoint avoids exhausting the
+   provider's connection limit.
+2. Set it in the host's environment as `DATABASE_URL`, and set `PG_POOL_MAX` to a
+   small number such as `5` on free tiers.
+3. Restart. `GET /api/health` reports `"database": "postgres"` once it is
+   connected. Tables are created automatically on first start.
+
+Leave `DATABASE_URL` unset to keep using SQLite. If `DATABASE_URL` is set but
+unreachable, the app fails to start rather than silently falling back to an empty
+local database. Keep `ATTENDANCE_MASTER_KEY` unchanged for the life of the
+database: every stored field is encrypted with it, and changing it makes existing
+rows unreadable.
 
 ---
 
