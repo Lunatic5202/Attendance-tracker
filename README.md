@@ -356,6 +356,12 @@ local database. Keep `ATTENDANCE_MASTER_KEY` unchanged for the life of the
 database: every stored field is encrypted with it, and changing it makes existing
 rows unreadable.
 
+On PostgreSQL the enrolled **face templates are stored in the database too**, as
+encrypted rows, not as files in the container. Enrolling someone from the admin
+console therefore survives a redeploy on its own — no export or copy step. On
+SQLite they stay under `data/faces` as before, which is fine because a local
+kiosk's disk persists.
+
 ---
 
 ## 📊 Microsoft 365 / Excel Sync + Encrypted Backup *(optional)*

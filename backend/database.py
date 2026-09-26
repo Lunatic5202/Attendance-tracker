@@ -7,6 +7,7 @@ sqlite3-compatible surface returned by :func:`get_conn`, so both engines share
 the same queries.
 """
 
+import base64
 import os
 import sqlite3
 from datetime import datetime, timezone
@@ -188,12 +189,38 @@ def _schema() -> list[str]:
     ]
 
 
+def _postgres_extra() -> list[str]:
+    """DDL used only on PostgreSQL.
+
+    Face templates are stored here instead of on the container filesystem so
+    they survive a redeploy.
+    """
+    if not using_postgres():
+        return []
+    return [
+        """
+        CREATE TABLE IF NOT EXISTS face_templates (
+            label INTEGER NOT NULL,
+            idx   INTEGER NOT NULL,
+            data  BYTEA NOT NULL,
+            PRIMARY KEY (label, idx)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS face_registry (
+            label   INTEGER PRIMARY KEY,
+            version BIGINT NOT NULL DEFAULT 1
+        )
+        """,
+    ]
+
+
 def init_db() -> None:
     """Create tables if they do not exist."""
     if not using_postgres():
-        os.makedirs(DATA_DIR, exist_ok=True)
+        os.makedirs(os.path.dirname(os.path.abspath(DB_PATH)) or ".", exist_ok=True)
     with get_conn() as conn:
-        for statement in _schema():
+        for statement in _schema() + _postgres_extra():
             conn.execute(statement)
         _migrate_legacy_plaintext(conn)
 
@@ -221,13 +248,22 @@ def _migrate_legacy_plaintext(conn) -> None:
             conn.execute(f"UPDATE {table} SET {sets} WHERE id = ?", values)
 
 
+def _jsonable(value):
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return base64.b64encode(bytes(value)).decode("ascii")
+    return value
+
+
 def export_snapshot() -> dict:
     """Return the stored rows of every table, for backups."""
+    tables = [table for table, _fields in _LEGACY_TABLES]
+    if using_postgres():
+        tables.extend(("face_templates", "face_registry"))
     snapshot = {}
     with get_conn() as conn:
-        for table, _fields in _LEGACY_TABLES:
+        for table in tables:
             rows = conn.execute(f"SELECT * FROM {table}").fetchall()
-            snapshot[table] = [dict(row) for row in rows]
+            snapshot[table] = [_jsonable(dict(row)) for row in rows]
     return snapshot
 
 

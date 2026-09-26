@@ -1,7 +1,9 @@
 """Face detection, enrollment and recognition.
 
 Primary stack: OpenCV Haar cascade (detection) + OpenCV LBPH model
-(recognition), trained on enrolled face crops stored under data/faces/.
+(recognition), trained on enrolled face crops. Those crops are kept under
+data/faces on SQLite and in PostgreSQL tables when ``DATABASE_URL`` is set,
+so enrollment survives a container rebuild.
 
 The engine degrades gracefully when OpenCV is not installed so the rest
 of the application can still be developed and demoed: DemoFaceEngine
@@ -14,6 +16,7 @@ from pathlib import Path
 
 import numpy as np
 
+from backend.face_store import FileFaceStore, build_store
 from backend.security import decrypt_bytes, encrypt_bytes
 
 log = logging.getLogger("face")
@@ -98,7 +101,7 @@ class OpenCVFaceEngine:
         self.confidence_threshold = float(os.getenv("FACE_CONFIDENCE", "120"))
         self._model = None
         self._model_sig = None
-        FACES_DIR.mkdir(parents=True, exist_ok=True)
+        self.store = build_store(FACES_DIR)
         self._migrate_legacy_faces()
 
     def _migrate_legacy_faces(self) -> None:
@@ -108,6 +111,8 @@ class OpenCVFaceEngine:
         only ``<label>.enc`` (Fernet-encrypted). Re-encrypt any legacy crop in
         place so existing enrollments keep working after an upgrade.
         """
+        if not isinstance(self.store, FileFaceStore):
+            return
         for path in sorted(FACES_DIR.glob("*.jpg")):
             try:
                 label = int(path.stem.split(".")[0])
@@ -149,20 +154,15 @@ class OpenCVFaceEngine:
 
     def _rebuild_model(self):
         images, labels = [], []
-        for path in FACES_DIR.glob("*.enc"):
+        for label, encrypted in self.store.iter_templates():
             try:
-                label = int(path.name.split(".", 1)[0].split("-", 1)[0])
-            except ValueError:
-                continue
-            try:
-                encrypted = path.read_bytes()
                 raw = np.frombuffer(decrypt_bytes(encrypted), dtype=np.uint8)
                 img = self.cv2.imdecode(raw, self.cv2.IMREAD_GRAYSCALE)
             except Exception as exc:
-                log.warning("Could not decrypt face template %s: %s", path, exc)
+                log.warning("Could not decrypt face template %s: %s", label, exc)
                 continue
             if img is None or img.size == 0:
-                log.warning("Could not read face crop %s", path)
+                log.warning("Could not read face crop %s", label)
                 continue
             if img.shape != (160, 160):
                 img = self.cv2.resize(img, (160, 160))
@@ -180,10 +180,7 @@ class OpenCVFaceEngine:
         Rebuilding on every frame made a live kiosk needlessly slow (and a
         stale build once broke recognition entirely after an enrollment).
         """
-        sig = tuple(
-            (p.stat().st_mtime_ns, p.stat().st_size)
-            for p in sorted(FACES_DIR.glob("*.enc"))
-        )
+        sig = self.store.signature()
         if sig != self._model_sig and self._model is not None:
             self._model = None  # templates changed -> drop cache
         if self._model is None:
@@ -200,10 +197,7 @@ class OpenCVFaceEngine:
         ok, encoded = self.cv2.imencode(".png", face)
         if not ok:
             return False
-        self._clear(label)
-        path = FACES_DIR / f"{label}.enc"
-        path.write_bytes(encrypt_bytes(encoded.tobytes()))
-        self._record(label)
+        self.store.save(label, [encrypt_bytes(encoded.tobytes())])
         return True
 
     def enroll_many(self, label: int, images) -> bool:
@@ -223,31 +217,11 @@ class OpenCVFaceEngine:
                 crops.append(encrypt_bytes(encoded.tobytes()))
         if not crops:
             return False
-        self._clear(label)
-        if len(crops) == 1:
-            (FACES_DIR / f"{label}.enc").write_bytes(crops[0])
-        else:
-            for i, raw in enumerate(crops):
-                (FACES_DIR / f"{label}-{i}.enc").write_bytes(raw)
-        self._record(label)
+        self.store.save(label, crops)
         return True
 
-    def _clear(self, label: int) -> None:
-        """Drop all stored templates/provenance for ``label`` (single + multi)."""
-        for path in FACES_DIR.glob(f"{label}*"):
-            if path.suffix in {".enc", ".meta"}:
-                path.unlink(missing_ok=True)
-
-    def _record(self, label: int) -> None:
-        # Store a small provenance file so we know a template exists.
-        marker = FACES_DIR / f"{label}.meta"
-        marker.write_text("registered", encoding="utf-8")
-
     def has(self, label: int) -> bool:
-        return (
-            (FACES_DIR / f"{label}.enc").exists()
-            or any(FACES_DIR.glob(f"{label}-*.enc"))
-        )
+        return self.store.has(label)
 
     def recognize(self, image, candidates: list[int] | None = None) -> tuple[int, float] | None:
         crop = self._largest(image)

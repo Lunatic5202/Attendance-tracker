@@ -333,5 +333,156 @@ class BackendSelectionTests(unittest.TestCase):
             self.assertFalse(db.using_postgres())
 
 
+class RecordingOnlyConnection:
+    """Captures emitted SQL without executing it, for dialect validation."""
+
+    def __init__(self, seen, rows):
+        self._seen = seen
+        self._rows = rows
+
+    def execute(self, sql, params=()):
+        self._seen.append(sql)
+
+        class _Cursor:
+            def fetchone(_self):
+                return self._rows[0] if self._rows else None
+
+            def fetchall(_self):
+                return list(self._rows)
+
+        return _Cursor()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc):
+        return False
+
+    def commit(self):
+        return None
+
+    def rollback(self):
+        return None
+
+    def close(self):
+        return None
+
+
+@unittest.skipUnless(parse_sql is not None, "pglast is not installed")
+class PostgresFaceStoreSqlTests(unittest.TestCase):
+    def test_postgres_extra_schema_parses(self):
+        with patch.object(db, "DATABASE_URL", PG_URL):
+            statements = db._postgres_extra()
+        self.assertTrue(statements, "face template tables must be created on PostgreSQL")
+        for statement in statements:
+            parse_as_postgres(statement)
+
+    def test_face_template_tables_are_not_created_on_sqlite(self):
+        with patch.object(db, "DATABASE_URL", ""):
+            self.assertEqual(db._postgres_extra(), [])
+
+    def test_postgres_face_store_emits_valid_sql(self):
+        from backend.face_store import PostgresFaceStore
+
+        seen = []
+        rows = [{"label": 1, "data": b"blob", "c": 1, "v": 1}]
+
+        def recording_get_conn():
+            return RecordingOnlyConnection(seen, rows)
+
+        store = PostgresFaceStore(probe_seconds=0.0)
+        with patch.object(db, "get_conn", recording_get_conn):
+            store.save(1, [b"a", b"b"])
+            store.has(1)
+            store.signature()
+            list(store.iter_templates())
+            store.clear(1)
+
+        self.assertGreaterEqual(len(seen), 6)
+        for sql in seen:
+            parse_as_postgres(sql)
+
+    def test_save_bumps_the_registry_version(self):
+        from backend.face_store import PostgresFaceStore
+
+        seen = []
+        store = PostgresFaceStore()
+        with patch.object(
+            db, "get_conn", lambda: RecordingOnlyConnection(seen, [{"c": 0, "v": 0}])
+        ):
+            store.save(1, [b"a"])
+        self.assertTrue(
+            any("ON CONFLICT" in sql and "version" in sql for sql in seen),
+            f"expected a version bump, saw {seen}",
+        )
+
+
+class FaceStoreSelectionTests(unittest.TestCase):
+    def test_sqlite_selects_the_file_store(self):
+        from backend.face_store import FileFaceStore, PostgresFaceStore, build_store
+
+        with patch.object(db, "DATABASE_URL", ""):
+            self.assertIsInstance(build_store("/tmp/does-not-matter"), FileFaceStore)
+
+    def test_postgres_selects_the_database_store(self):
+        from backend.face_store import FileFaceStore, PostgresFaceStore, build_store
+
+        with patch.object(db, "DATABASE_URL", PG_URL):
+            self.assertIsInstance(build_store("/tmp/does-not-matter"), PostgresFaceStore)
+
+
+class BackupAndPathTests(unittest.TestCase):
+    def test_sqlite_backup_contains_the_database_file(self):
+        import io
+        import tarfile
+
+        from backend import backup_sync
+
+        with patch.object(db, "using_postgres", return_value=False):
+            with tarfile.open(fileobj=io.BytesIO(backup_sync._archive_bytes())) as archive:
+                self.assertIn("attendance.db", archive.getnames())
+
+    def test_postgres_backup_contains_a_json_dump(self):
+        import io
+        import json
+        import tarfile
+
+        from backend import backup_sync
+
+        snapshot = {"employees": [{"id": "EMP001"}], "face_templates": []}
+        with patch.object(db, "using_postgres", return_value=True), patch.object(
+            db, "export_snapshot", return_value=snapshot
+        ):
+            with tarfile.open(fileobj=io.BytesIO(backup_sync._archive_bytes())) as archive:
+                names = archive.getnames()
+                self.assertIn("attendance-data.json", names)
+                self.assertNotIn("attendance.db", names)
+                payload = json.loads(archive.extractfile("attendance-data.json").read())
+        self.assertEqual(payload, snapshot)
+
+    def test_binary_template_data_is_json_safe(self):
+        self.assertEqual(db._jsonable(b"\x00\x01\xff"), "AAH/")
+
+    def test_init_creates_missing_parent_directories(self):
+        target = os.path.join(tempfile.mkdtemp(prefix="nested-db-"), "deep", "deeper", "a.db")
+        with patch.object(db, "DB_PATH", target), patch.object(db, "DATABASE_URL", ""):
+            db.init_db()
+        self.assertTrue(os.path.exists(target))
+
+    def test_postgres_snapshot_includes_face_tables(self):
+        seen = []
+
+        def recording_get_conn():
+            return RecordingOnlyConnection(seen, [])
+
+        with patch.object(db, "DATABASE_URL", PG_URL), patch.object(
+            db, "get_conn", recording_get_conn
+        ):
+            snapshot = db.export_snapshot()
+        self.assertIn("face_templates", snapshot)
+        self.assertIn("face_registry", snapshot)
+        self.assertEqual(len(seen), 4)
+
+
 if __name__ == "__main__":
     unittest.main()
