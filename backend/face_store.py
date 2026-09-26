@@ -1,6 +1,7 @@
 """Storage backends for enrolled face templates.
 
-Templates are Fernet-encrypted LBPH face crops. They are kept as files under
+Templates are Fernet-encrypted SFace embeddings (512 bytes each, not pictures).
+They are kept as files under
 ``data/faces`` when the app runs on SQLite, and in PostgreSQL tables when
 ``DATABASE_URL`` is set, because a container filesystem is wiped on every
 deploy while a managed database survives.

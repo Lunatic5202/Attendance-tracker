@@ -90,12 +90,14 @@ def _next_employee_id(conn) -> str:
 def _insert_employee(conn, record: dict) -> None:
     conn.execute(
         """
-        INSERT INTO employees (id, name, department, role, email, phone, face_label, face_available, is_active, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO employees (id, name, department, role, email, phone, category,
+                               face_label, face_available, is_active, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             record["id"], record["name"], record["department"], record["role"], record["email"],
-            record["phone"], record.get("face_label"), record.get("face_available", 0),
+            record["phone"], record.get("category") or "office",
+            record.get("face_label"), record.get("face_available", 0),
             record.get("is_active", 1), record["created_at"],
         ),
     )
@@ -180,7 +182,7 @@ def _attendance_entry(conn, employee_id: str, date: str) -> dict | None:
 def _attendance_by_date(conn, date: str) -> list[dict]:
     rows = conn.execute(
         """
-        SELECT a.*, e.name, e.department, e.role
+        SELECT a.*, e.name, e.department, e.role, e.category
         FROM attendance a JOIN employees e ON e.id = a.employee_id
         WHERE a.date = ?
         ORDER BY a.check_in, a.check_out
@@ -193,7 +195,7 @@ def _attendance_by_date(conn, date: str) -> list[dict]:
 def _attendance_by_employee(conn, employee_id: str, limit: int = 60) -> list[dict]:
     rows = conn.execute(
         """
-        SELECT a.*, e.name, e.department, e.role
+        SELECT a.*, e.name, e.department, e.role, e.category
         FROM attendance a JOIN employees e ON e.id = a.employee_id
         WHERE a.employee_id = ?
         ORDER BY a.date DESC, a.check_in DESC
@@ -204,12 +206,65 @@ def _attendance_by_employee(conn, employee_id: str, limit: int = 60) -> list[dic
     return [dict(r) for r in rows]
 
 
+def _insert_field_visit(conn, record: dict) -> None:
+    conn.execute(
+        """
+        INSERT INTO field_visits (employee_id, date, visited_at, source, created_at)
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (
+            record["employee_id"], record["date"], record["visited_at"],
+            record.get("source", "face"), record["created_at"],
+        ),
+    )
+
+
+def _field_visits_by_date(conn, date: str) -> list[dict]:
+    rows = conn.execute(
+        """
+        SELECT v.*, e.name, e.department, e.role, e.category
+        FROM field_visits v JOIN employees e ON e.id = v.employee_id
+        WHERE v.date = ?
+        ORDER BY v.visited_at
+        """,
+        (date,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def _field_visits_by_employee(conn, employee_id: str, limit: int = 60) -> list[dict]:
+    rows = conn.execute(
+        """
+        SELECT v.*, e.name, e.department, e.role, e.category
+        FROM field_visits v JOIN employees e ON e.id = v.employee_id
+        WHERE v.employee_id = ?
+        ORDER BY v.date DESC, v.visited_at DESC
+        LIMIT ?
+        """,
+        (employee_id, limit),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
 def _attendance_all(conn, limit: int) -> list[dict]:
     rows = conn.execute(
         """
-        SELECT a.*, e.name, e.department, e.role
+        SELECT a.*, e.name, e.department, e.role, e.category
         FROM attendance a JOIN employees e ON e.id = a.employee_id
         ORDER BY a.date ASC, a.check_in ASC, e.name ASC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def _field_visits_all(conn, limit: int = 5000) -> list[dict]:
+    rows = conn.execute(
+        """
+        SELECT v.*, e.name, e.department, e.role, e.category
+        FROM field_visits v JOIN employees e ON e.id = v.employee_id
+        ORDER BY v.date ASC, v.visited_at ASC, e.name ASC
         LIMIT ?
         """,
         (limit,),
@@ -259,6 +314,9 @@ class SQLiteSession:
 
     def close_attendance(self, row_id: int, check_out: str, hours: float) -> None:
         _close_attendance(self._conn, row_id, check_out, hours)
+
+    def insert_field_visit(self, record: dict) -> None:
+        _insert_field_visit(self._conn, record)
 
 
 class SQLiteStore(Store):
@@ -357,6 +415,22 @@ class SQLiteStore(Store):
     def attendance_all(self, limit: int = 5000) -> list[dict]:
         with db.get_conn() as conn:
             return _attendance_all(conn, limit)
+
+    def insert_field_visit(self, record: dict) -> None:
+        with db.get_conn() as conn:
+            _insert_field_visit(conn, record)
+
+    def field_visits_by_date(self, date: str) -> list[dict]:
+        with db.get_conn() as conn:
+            return _field_visits_by_date(conn, date)
+
+    def field_visits_by_employee(self, employee_id: str, limit: int = 60) -> list[dict]:
+        with db.get_conn() as conn:
+            return _field_visits_by_employee(conn, employee_id, limit)
+
+    def field_visits_all(self, limit: int = 5000) -> list[dict]:
+        with db.get_conn() as conn:
+            return _field_visits_all(conn, limit)
 
 
 store: Store = SQLiteStore()

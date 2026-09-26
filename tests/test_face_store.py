@@ -107,11 +107,11 @@ class EnginePersistenceTests(unittest.TestCase):
         engine._largest = lambda image: (0, 0, 160, 160)
         return engine
 
-    def test_model_rebuilds_from_stored_templates_only(self):
-        self.assertTrue(self.engine.enroll_many(1, [self._pattern(1)]))
-        self.assertTrue(self.engine.enroll_many(2, [self._pattern(2)]))
+    def test_gallery_rebuilds_from_stored_templates_only(self):
+        self.engine.enroll_many(1, [self._pattern(1)])
+        self.engine.enroll_many(2, [self._pattern(2)])
         fresh = self._fresh_engine()
-        self.assertIsNotNone(fresh._get_model(), "a new engine must train from the store")
+        self.assertIsNotNone(fresh._get_gallery(), "a new engine must load from the store")
 
     def test_recognizes_each_stored_employee(self):
         self.engine.enroll_many(1, [self._pattern(1)])
@@ -135,6 +135,42 @@ class EnginePersistenceTests(unittest.TestCase):
         fresh = self._fresh_engine()
         self.assertFalse(fresh.has(1))
         self.assertTrue(fresh.has(2))
+
+    def test_legacy_lbph_template_is_not_treated_as_enrolled(self):
+        """An LBPH-era crop is unusable by SFace, so it must read as absent."""
+        from backend.face_recognition import EMBED_BYTES
+        from backend.security import encrypt_bytes
+
+        self.engine.store.save(3, [encrypt_bytes(b"\x00" * 25600)])
+        fresh = self._fresh_engine()
+        self.assertFalse(fresh.has(3), "legacy crop must not count as a valid template")
+        self.assertNotIn(3, fresh._get_gallery() or {})
+
+    def test_template_is_a_512_byte_embedding(self):
+        from backend.face_recognition import EMBED_BYTES
+        from backend.security import decrypt_bytes
+
+        self.assertEqual(EMBED_BYTES, 512)
+        self.engine.enroll_many(1, [self._pattern(1)])
+        blob = decrypt_bytes(next(iter(self.engine.store.iter_templates()))[1])
+        self.assertEqual(len(blob), EMBED_BYTES)
+
+    def test_match_uses_the_minimum_distance_across_poses(self):
+        self.engine.enroll_many(1, [self._pattern(1), self._pattern(2)])
+        fresh = self._fresh_engine()
+        # Both stored poses must resolve to the same person.
+        self.assertEqual(fresh.recognize(self._pattern(1), [1])[0], 1)
+        self.assertEqual(fresh.recognize(self._pattern(2), [1])[0], 1)
+
+    def test_candidate_filter_is_respected(self):
+        self.engine.enroll_many(1, [self._pattern(1)])
+        self.engine.enroll_many(2, [self._pattern(2)])
+        fresh = self._fresh_engine()
+        # A candidate list naming nobody enrolled must not produce a match.
+        # (Note: noise images are only ~0.17 apart in SFace space, so this
+        # checks the filter itself, not real-face separability.)
+        self.assertIsNone(fresh.recognize(self._pattern(1), [99]))
+        self.assertIsNone(fresh.recognize(self._pattern(1), []))
 
 
 if __name__ == "__main__":

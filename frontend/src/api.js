@@ -59,6 +59,13 @@ export const api = {
     if (employeeId) q.set('employee_id', employeeId)
     return req(`/attendance?${q.toString()}`)
   },
+  // Field / ground crew visits, reported separately from office attendance.
+  visits: (date, employeeId) => {
+    const q = new URLSearchParams()
+    if (date) q.set('date', date)
+    if (employeeId) q.set('employee_id', employeeId)
+    return req(`/attendance/visits?${q.toString()}`)
+  },
   stats: (date) => req(`/stats${date ? `?date=${date}` : ''}`),
   departments: () => req('/departments'),
 

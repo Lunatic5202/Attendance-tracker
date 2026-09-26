@@ -60,11 +60,11 @@ export default function Dashboard() {
         <div className="empty">Loading snapshot…</div>
       ) : (
         <>
-          <div className="grid cols-4">
+          <div className="grid cols-5">
             <div className="card stat">
               <span className="kicker plain">Present</span>
               <div className="num">{stats?.present_today ?? 0}</div>
-              <span className="hint">checked in · {date}</span>
+              <span className="hint">office checked in · {date}</span>
             </div>
             <div className="card stat">
               <span className="kicker plain">Checked Out</span>
@@ -80,6 +80,11 @@ export default function Dashboard() {
               <span className="kicker plain">Avg. Hours</span>
               <div className="num">{stats?.avg_hours ? <>{stats.avg_hours}<small>h</small></> : '0'}</div>
               <span className="hint">per present employee</span>
+            </div>
+            <div className="card stat">
+              <span className="kicker plain">Field Visits</span>
+              <div className="num">{stats?.field_visits_today ?? 0}</div>
+              <span className="hint">{stats?.field_staff_seen_today ?? 0} crew seen today</span>
             </div>
           </div>
 

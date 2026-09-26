@@ -6,9 +6,11 @@ import { toast } from '../components/Toast'
 const actions = {
   'CHECK-IN': { label: 'Check-In', cls: 'in', icon: '→' },
   'CHECK-OUT': { label: 'Check-Out', cls: 'out', icon: '→' },
+  VISIT: { label: 'Visit Logged', cls: 'in', icon: '→' },
   UNKNOWN: { label: 'Unknown Face', cls: 'idle', icon: '?' },
   DUPLICATE_SCAN: { label: 'Duplicate Rejected', cls: 'idle', icon: '!' },
   CHECKOUT_TOO_EARLY: { label: 'Check-Out Held', cls: 'warn', icon: '⏱' },
+  WAIT: { label: 'One At A Time', cls: 'warn', icon: '⏱' },
   DEMO_NEEDS_EMPLOYEE: { label: 'Pick Employee', cls: 'idle', icon: '!' },
 }
 
@@ -78,10 +80,16 @@ export default function Scan() {
     if (action === 'CHECK-IN') {
       pushLog('SCAN', `${res.employee?.name} — CHECK-IN @${now}`, 'ok-line')
       toast(`${res.employee?.name} checked in · ${now}`, { ok: true })
+    } else if (action === 'VISIT') {
+      pushLog('SCAN', `${res.employee?.name} — VISIT @${now}`, 'ok-line')
+      toast(`${res.employee?.name} visit logged · ${now}`, { ok: true })
     } else if (action === 'CHECK-OUT') {
       const hrs = res.attendance?.hours_fmt || '—'
       pushLog('SCAN', `${res.employee?.name} — CHECK-OUT @${now} (${hrs})`, 'ok-line')
       toast(`${res.employee?.name} checked out · ${hrs}`, { ok: true })
+    } else if (action === 'WAIT') {
+      pushLog('VERIFY', `check-in buffer — wait ${res.retry_after ?? '?'}s`, 'err-line')
+      toast(`One at a time — wait ${res.retry_after ?? '?'}s`)
     } else if (action === 'DUPLICATE_SCAN') {
       pushLog('SCAN', 'duplicate rejected — day already closed', 'err-line')
     } else if (action === 'CHECKOUT_TOO_EARLY') {
@@ -103,7 +111,7 @@ export default function Scan() {
         <div>
           <span className="kicker plain">Kiosk // Live Attendance</span>
           <h1>Face <b>Scan</b></h1>
-          <div className="sub">first scan → CHECK-IN · a later scan after the work buffer → CHECK-OUT</div>
+          <div className="sub">first scan → CHECK-IN · later scan after 4h → CHECK-OUT · field crew → VISIT · one check-in at a time</div>
         </div>
         <label className="row" style={{ gap: '0.5rem', cursor: 'pointer' }}>
           <input type="checkbox" checked={scanning} onChange={(e) => setScanning(e.target.checked)} />

@@ -1,9 +1,14 @@
 """Face detection, enrollment and recognition.
 
-Primary stack: OpenCV Haar cascade (detection) + OpenCV LBPH model
-(recognition), trained on enrolled face crops. Those crops are kept under
-data/faces on SQLite and in PostgreSQL tables when ``DATABASE_URL`` is set,
-so enrollment survives a container rebuild.
+Primary stack: OpenCV Haar cascade (detection) + **SFace** (recognition), a
+deep 128-dimensional face embedding model from the OpenCV model zoo. SFace is
+substantially more accurate than the LBPH histogram model it replaces, which
+matters at a kiosk where a false reject means a real person cannot clock in.
+
+The stored "template" for an employee is therefore not a picture but a 512-byte
+float32 embedding, encrypted before it touches the disk or the database. It
+lives under data/faces on SQLite and in PostgreSQL tables when ``DATABASE_URL``
+is set, so enrollment survives a container rebuild.
 
 The engine degrades gracefully when OpenCV is not installed so the rest
 of the application can still be developed and demoed: DemoFaceEngine
@@ -23,9 +28,20 @@ log = logging.getLogger("face")
 
 DATA_DIR = Path(os.getenv("ATTENDANCE_DATA", "data"))
 FACES_DIR = DATA_DIR / "faces"
-MODEL_PATH = FACES_DIR / "recognizer.yml"
 CASCADE_PATH = FACES_DIR / "haarcascade_frontalface_default.xml"
 VENDORED_CASCADE = Path(__file__).parent / "face_recognition_data" / "haarcascade_frontalface_default.xml"
+
+#: SFace is fetched during the Docker build; ``SFACE_MODEL`` can point elsewhere.
+SFACE_MODEL = Path(
+    os.getenv("SFACE_MODEL")
+    or Path(__file__).parent / "models" / "face_recognition_sface_2021dec.onnx"
+)
+#: SFace expects a 112x112 crop and returns a 128-dim float32 embedding.
+SFACE_INPUT = 112
+EMBED_DIMS = 128
+EMBED_BYTES = EMBED_DIMS * 4
+#: LFW-masked cosine distance for the 2021dec SFace model.
+DEFAULT_FACE_THRESHOLD = 0.363
 
 
 def _installed() -> bool:
@@ -36,13 +52,31 @@ def _installed() -> bool:
         return False
 
 
+def _load_sface():
+    """Return a ready SFace recognizer, or raise if the model is unusable."""
+    import cv2
+
+    if not hasattr(cv2, "FaceRecognizerSF_create"):
+        raise RuntimeError("This OpenCV build has no FaceRecognizerSF (need opencv-contrib-python).")
+    if not SFACE_MODEL.exists():
+        raise RuntimeError(f"SFace model not found at {SFACE_MODEL}.")
+    recognizer = cv2.FaceRecognizerSF_create(str(SFACE_MODEL), "")
+    # Force a forward pass so a corrupt/truncated model fails here, at build or
+    # boot time, instead of silently mis-recognising people at the kiosk.
+    probe = np.zeros((SFACE_INPUT, SFACE_INPUT, 3), dtype=np.uint8)
+    embedding = recognizer.feature(probe)
+    if embedding is None or embedding.size != EMBED_DIMS:
+        raise RuntimeError("SFace model returned an unexpected embedding.")
+    return recognizer
+
+
 def build_engine():
     """Return the best available face engine."""
     if _installed():
         try:
             return OpenCVFaceEngine()
         except Exception as exc:  # pragma: no cover - env dependent
-            log.warning("OpenCV engine unavailable (%s); using demo engine.", exc)
+            log.error("OpenCV/SFace engine unavailable (%s); using demo engine.", exc)
     log.warning("OpenCV not installed; using demo (manual) face engine.")
     return DemoFaceEngine()
 
@@ -76,7 +110,7 @@ class DemoFaceEngine:
 
 
 class OpenCVFaceEngine:
-    """OpenCV Haar + LBPH face engine."""
+    """OpenCV Haar cascade + SFace embedding recognizer."""
 
     name = "opencv"
 
@@ -84,6 +118,7 @@ class OpenCVFaceEngine:
         import cv2  # noqa: WPS433 (imported lazily on purpose)
 
         self.cv2 = cv2
+        self.recognizer = _load_sface()
         cascade = None
         # 1) repo-vendored copy baked into the image (reliable on every host,
         #    including minimal opencv wheels that drop cv2.data.haarcascades).
@@ -98,18 +133,21 @@ class OpenCVFaceEngine:
         self.detector = cv2.CascadeClassifier(cascade)
         if self.detector.empty():
             raise RuntimeError("Haar cascade classifier failed to load.")
-        self.confidence_threshold = float(os.getenv("FACE_CONFIDENCE", "120"))
-        self._model = None
-        self._model_sig = None
+        # Normalise uneven kiosk lighting on the L channel before embedding.
+        self._clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        self.threshold = float(os.getenv("FACE_THRESHOLD", DEFAULT_FACE_THRESHOLD))
+        self._gallery = None
+        self._gallery_sig = None
+        self._skipped_legacy = 0
         self.store = build_store(FACES_DIR)
         self._migrate_legacy_faces()
 
     def _migrate_legacy_faces(self) -> None:
-        """Encrypt templates left behind by pre-encryption builds.
+        """Remove plaintext face crops left behind by pre-encryption builds.
 
-        Older versions stored plain ``<label>.jpg`` crops. Newer versions keep
-        only ``<label>.enc`` (Fernet-encrypted). Re-encrypt any legacy crop in
-        place so existing enrollments keep working after an upgrade.
+        Older versions stored plain ``<label>.jpg`` crops. They are deleted
+        rather than converted: SFace needs a photo to embed, and keeping a
+        stale crop would only leave unusable templates behind.
         """
         if not isinstance(self.store, FileFaceStore):
             return
@@ -118,13 +156,7 @@ class OpenCVFaceEngine:
                 label = int(path.stem.split(".")[0])
             except ValueError:
                 continue
-            target = FACES_DIR / f"{label}.enc"
-            if not target.exists():
-                try:
-                    target.write_bytes(encrypt_bytes(path.read_bytes()))
-                except Exception as exc:
-                    log.warning("Could not migrate face template %s: %s", path, exc)
-                    continue
+            self.store.clear(label)
             path.unlink(missing_ok=True)
 
     # ---- helpers ---------------------------------------------------------
@@ -146,106 +178,144 @@ class OpenCVFaceEngine:
             return None
         return max(faces, key=lambda b: b[2] * b[3])
 
-    def _encode(self, image, crop):
+    def _prepare(self, image, crop):
+        """Crop the detected face and return the 112x112 BGR buffer SFace wants."""
         x, y, w, h = crop
-        face = self._gray(image)[y : y + h, x : x + w]
-        face = self.cv2.resize(face, (160, 160))
-        return face
+        face = image[y : y + h, x : x + w]
+        if len(face.shape) == 2:
+            face = self.cv2.cvtColor(face, self.cv2.COLOR_GRAY2BGR)
+        face = self.cv2.resize(face, (SFACE_INPUT, SFACE_INPUT))
+        # CLAHE per channel keeps shadows/uneven lighting from dominating the
+        # embedding; SFace expects colour, so it is applied to all three.
+        return self.cv2.merge([self._clahe.apply(ch) for ch in self.cv2.split(face)])
 
-    def _rebuild_model(self):
-        images, labels = [], []
+    def _embed(self, image, crop) -> np.ndarray | None:
+        buffer = self._prepare(image, crop)
+        embedding = self.recognizer.feature(buffer)
+        if embedding is None or embedding.size != EMBED_DIMS:
+            return None
+        vector = np.asarray(embedding, dtype=np.float32).reshape(-1)
+        norm = float(np.linalg.norm(vector))
+        return vector / norm if norm else None
+
+    @staticmethod
+    def _cosine(a: np.ndarray, b: np.ndarray) -> float:
+        denom = float(np.linalg.norm(a) * np.linalg.norm(b))
+        if not denom:
+            return 1.0
+        return 1.0 - float(np.dot(a, b)) / denom
+
+    def _rebuild_gallery(self):
+        """Return ``{label: [embedding, ...]}`` from the stored templates."""
+        gallery: dict[int, list[np.ndarray]] = {}
+        skipped = 0
         for label, encrypted in self.store.iter_templates():
             try:
-                raw = np.frombuffer(decrypt_bytes(encrypted), dtype=np.uint8)
-                img = self.cv2.imdecode(raw, self.cv2.IMREAD_GRAYSCALE)
+                raw = decrypt_bytes(encrypted)
             except Exception as exc:
                 log.warning("Could not decrypt face template %s: %s", label, exc)
                 continue
-            if img is None or img.size == 0:
-                log.warning("Could not read face crop %s", label)
+            if len(raw) != EMBED_BYTES:
+                # An LBPH-era crop: unusable by SFace, needs re-enrollment.
+                skipped += 1
                 continue
-            if img.shape != (160, 160):
-                img = self.cv2.resize(img, (160, 160))
-            images.append(img)
-            labels.append(label)
-        if not images:
-            return None
-        model = self.cv2.face.LBPHFaceRecognizer_create()
-        model.train(images, np.asarray(labels, dtype=np.int32))
-        return model
+            vector = np.frombuffer(raw, dtype=np.float32)
+            norm = float(np.linalg.norm(vector))
+            if not norm:
+                continue
+            gallery.setdefault(label, []).append(vector / norm)
+        if skipped:
+            log.warning(
+                "Skipped %d legacy LBPH template(s); those employees must re-enrol once for SFace.",
+                skipped,
+            )
+        self._skipped_legacy = skipped
+        return gallery or None
 
-    def _get_model(self):
-        """Return the trained recognizer, cached until the templates change.
+    def _get_gallery(self):
+        """Return the embedding gallery, cached until the templates change.
 
-        Rebuilding on every frame made a live kiosk needlessly slow (and a
-        stale build once broke recognition entirely after an enrollment).
+        Rebuilding on every frame made a live kiosk needlessly slow.
         """
         sig = self.store.signature()
-        if sig != self._model_sig and self._model is not None:
-            self._model = None  # templates changed -> drop cache
-        if self._model is None:
-            self._model = self._rebuild_model()
-            self._model_sig = sig
-        return self._model
+        if sig != self._gallery_sig and self._gallery is not None:
+            self._gallery = None  # templates changed -> drop cache
+        if self._gallery is None:
+            self._gallery = self._rebuild_gallery()
+            self._gallery_sig = sig
+        return self._gallery
 
     # ---- public api ------------------------------------------------------
     def enroll(self, label: int, image) -> bool:
         crop = self._largest(image)
         if crop is None:
             return False
-        face = self._encode(image, crop)
-        ok, encoded = self.cv2.imencode(".png", face)
-        if not ok:
-            return False
-        self.store.save(label, [encrypt_bytes(encoded.tobytes())])
-        return True
+        return self.enroll_many(label, [image])
 
     def enroll_many(self, label: int, images) -> bool:
         """Replace the templates for ``label`` with one per supplied image.
 
-        Multiple poses/pictures improve recognition. Returns ``True`` if at
+        Multiple poses/pictures improve recognition, since a match is the best
+        (lowest) distance across the stored embeddings. Returns ``True`` if at
         least one image contained a usable face.
         """
-        crops = []
+        stored = []
         for image in images:
             crop = self._largest(image)
             if crop is None:
                 continue
-            face = self._encode(image, crop)
-            ok, encoded = self.cv2.imencode(".png", face)
-            if ok:
-                crops.append(encrypt_bytes(encoded.tobytes()))
-        if not crops:
+            vector = self._embed(image, crop)
+            if vector is not None:
+                stored.append(encrypt_bytes(vector.tobytes()))
+        if not stored:
             return False
-        self.store.save(label, crops)
+        self.store.save(label, stored)
         return True
 
     def has(self, label: int) -> bool:
-        return self.store.has(label)
+        """Whether ``label`` has a template SFace can actually use.
+
+        Validating the stored bytes (rather than just asking the store) means a
+        leftover LBPH-era template counts as "not enrolled", so the startup seed
+        and the admin UI both offer a re-enroll instead of leaving an employee
+        permanently unrecognisable.
+        """
+        for _label, encrypted in self.store.iter_templates():
+            if _label != label:
+                continue
+            try:
+                if len(decrypt_bytes(encrypted)) == EMBED_BYTES:
+                    return True
+            except Exception:
+                continue
+        return False
 
     def recognize(self, image, candidates: list[int] | None = None) -> tuple[int, float] | None:
         crop = self._largest(image)
         if crop is None:
             return None
-        face = self._encode(image, crop)
-        model = self._get_model()
-        if model is None:
+        query = self._embed(image, crop)
+        if query is None:
             return None
-        label, confidence = model.predict(face)
-        decided = (
-            (label, float(confidence))
-            if confidence <= self.confidence_threshold
-            and (candidates is None or label in candidates)
-            else None
-        )
+        gallery = self._get_gallery()
+        if not gallery:
+            return None
+        best_label, best = None, None
+        for label, vectors in gallery.items():
+            if candidates is not None and label not in candidates:
+                continue
+            distance = min(self._cosine(query, vector) for vector in vectors)
+            if best is None or distance < best:
+                best_label, best = label, distance
+        decided = best if best is not None and best <= self.threshold else None
         log.info(
-            "scan decision: label=%s distance=%.1f threshold=%.1f -> %s",
-            label,
-            confidence,
-            self.confidence_threshold,
-            "MATCH" if decided else "REJECT",
+            "scan decision: label=%s distance=%.4f threshold=%.4f -> %s",
+            best_label,
+            best if best is not None else float("nan"),
+            self.threshold,
+            "MATCH" if decided is not None else "REJECT",
         )
-        return decided
+        return (best_label, best) if decided is not None else None
 
 
 engine = build_engine()

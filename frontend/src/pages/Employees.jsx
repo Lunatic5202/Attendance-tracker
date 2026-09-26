@@ -117,7 +117,7 @@ function EnrollModal({ employee, onClose, onDone }) {
 }
 
 function AddModal({ onClose, onCreated }) {
-  const [form, setForm] = useState({ name: '', department: 'General', role: '', email: '', phone: '' })
+  const [form, setForm] = useState({ name: '', department: 'General', role: '', email: '', phone: '', category: 'office' })
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }))
   const [busy, setBusy] = useState(false)
 
@@ -144,6 +144,13 @@ function AddModal({ onClose, onCreated }) {
           <button className="x-btn" onClick={onClose}>✕</button>
         </div>
         <div className="mbody">
+          <div className="field">
+            <label>Staff Type *</label>
+            <select className="input" value={form.category} onChange={set('category')}>
+              <option value="office">Office — fixed shift, checks in and out</option>
+              <option value="field">Field / Ground Crew — logs a visit per scan</option>
+            </select>
+          </div>
           <div className="field">
             <label>Full Name *</label>
             <input className="input" value={form.name} onChange={set('name')} placeholder="e.g. John Doe" />
@@ -245,6 +252,7 @@ export default function Employees() {
               <tr>
                 <th>ID</th>
                 <th>Name</th>
+                <th>Type</th>
                 <th>Department</th>
                 <th>Role</th>
                 <th>Face</th>
@@ -259,6 +267,11 @@ export default function Employees() {
                   <td>
                     <div className="strong-cell">{e.name}</div>
                     <div className="muted-cell">{e.email}</div>
+                  </td>
+                  <td>
+                    <span className={`badge ${e.category === 'field' ? 'warn' : 'plain'}`}>
+                      {e.category === 'field' ? 'Field' : 'Office'}
+                    </span>
                   </td>
                   <td className="muted-cell">{e.department}</td>
                   <td className="muted-cell">{e.role || '—'}</td>

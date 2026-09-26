@@ -12,6 +12,11 @@ data/*.db-journal
 data/faces/*
 !data/.gitkeep
 
+# Face recognition models (fetched at Docker build, not committed)
+backend/models/*.onnx
+backend/models/*.caffemodel
+backend/models/*.prototxt
+
 # Frontend
 frontend/node_modules/
 frontend/dist/

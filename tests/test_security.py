@@ -19,11 +19,15 @@ class SecurityAndAttendanceTests(unittest.TestCase):
         with db.get_conn() as conn:
             conn.execute(
                 """
-                INSERT INTO employees (id, name, department, role, email, phone, face_label, face_available, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO employees (id, name, department, role, email, phone, category, face_label, face_available, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                ("EMP001", encrypt_text("Asha Rao"), encrypt_text("Operations"), encrypt_text("Engineer"), encrypt_text("asha@example.com"), encrypt_text("123"), 1, 1, encrypt_text("08:00:00")),
+                ("EMP001", encrypt_text("Asha Rao"), encrypt_text("Operations"), encrypt_text("Engineer"), encrypt_text("asha@example.com"), encrypt_text("123"), "office", 1, 1, encrypt_text("08:00:00")),
             )
+
+    def setUp(self):
+        # The check-in buffer is process-wide state; start each test clean.
+        attendance.reset_buffer()
 
     def test_encryption_round_trip(self):
         encrypted = encrypt_text("private-value")

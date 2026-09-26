@@ -190,6 +190,7 @@ class PostgresDialectTests(unittest.TestCase):
         store.delete_employee("EMP001")
 
     def test_checkout_flow_runs_and_validates(self):
+        attendance.reset_buffer()
         employee = {
             "id": "EMP010",
             "name": encrypt_text("Bo Li"),
@@ -197,6 +198,7 @@ class PostgresDialectTests(unittest.TestCase):
             "role": encrypt_text("Lead"),
             "email": encrypt_text("bo@example.com"),
             "phone": encrypt_text("456"),
+            "category": "office",
             "is_active": 1,
             "created_at": encrypt_text("08:00:00"),
         }
@@ -481,7 +483,8 @@ class BackupAndPathTests(unittest.TestCase):
             snapshot = db.export_snapshot()
         self.assertIn("face_templates", snapshot)
         self.assertIn("face_registry", snapshot)
-        self.assertEqual(len(seen), 4)
+        self.assertIn("field_visits", snapshot)
+        self.assertEqual(len(seen), 5)
 
 
 if __name__ == "__main__":

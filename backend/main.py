@@ -27,7 +27,7 @@ from backend import attendance, backup_sync, database as db, excel_sync, onedriv
 from backend import seed_data
 from backend.attendance import AttendanceError
 from backend.face_recognition import engine
-from backend.limits import scan_limiter
+from backend.limits import client_identity, scan_limiter
 from backend.store import store
 from backend.security import (
     SESSION_COOKIE,
@@ -86,6 +86,7 @@ class EmployeeCreate(BaseModel):
     role: str = ""
     email: str = ""
     phone: str = ""
+    category: str = "office"
     face_image: str | None = Field(None, max_length=4_000_000)  # base64 (data URL or raw)
 
 
@@ -95,6 +96,7 @@ class EmployeeUpdate(BaseModel):
     role: str | None = None
     email: str | None = None
     phone: str | None = None
+    category: str | None = None
     is_active: bool | None = None
 
 
@@ -231,11 +233,13 @@ def create_employee(body: EmployeeCreate, _: bool = Depends(require_admin)):
                     "phone": body.phone,
                 }.items()
             },
+            "category": attendance.normalise_category(body.category),
             "created_at": security.encrypt_text(db.now_str()),
         }
     )
     new = {"id": emp_id, "name": body.name, "department": body.department,
            "role": body.role, "email": body.email, "phone": body.phone,
+           "category": attendance.normalise_category(body.category),
            "face_enrolled": False, "is_active": 1}
     if body.face_image:
         try:
@@ -267,6 +271,8 @@ def update_employee(employee_id: str, body: EmployeeUpdate, _: bool = Depends(re
     for key, value in fields.items():
         if key in {"name", "department", "role", "email", "phone"}:
             value = security.encrypt_text(value)
+        elif key == "category":
+            value = attendance.normalise_category(value)
         sets[key] = value
     return public_employee(store.update_employee(employee_id, sets))
 
@@ -379,7 +385,7 @@ def departments(_: bool = Depends(require_admin)):
 @app.post("/api/attendance/scan")
 def scan_attendance(body: ScanRequest, request: Request):
     """Auto check-in / check-out driven by a recognised face."""
-    client = _client_identity(request)
+    client = client_identity(request)
     allowed, retry_after = scan_limiter.check(client)
     if not allowed:
         return JSONResponse(
@@ -405,6 +411,13 @@ def scan_attendance(body: ScanRequest, request: Request):
         result = attendance.record_scan(employee_id, source="face")
         return result
     except AttendanceError as exc:
+        if exc.code == "buffer_active":
+            # One check-in at a time: tell the kiosk exactly how long to wait.
+            return JSONResponse(
+                {"action": "WAIT", "message": exc.message, **exc.info},
+                status_code=429,
+                headers={"Retry-After": str(exc.info.get("retry_after", 1))},
+            )
         status_code = 409 if exc.code == "duplicate_scan" else 422
         return JSONResponse(
             {"action": exc.code.upper(), "message": exc.message, **exc.info},
@@ -425,6 +438,14 @@ def get_attendance(date: str | None = Query(None), employee_id: str | None = Non
     if employee_id:
         return attendance.get_by_employee(employee_id)
     return attendance.get_by_date(date or db.today_str())
+
+
+@app.get("/api/attendance/visits")
+def get_visits(date: str | None = Query(None), employee_id: str | None = None, _: bool = Depends(require_admin)):
+    """Field / ground crew visits, kept separate from office attendance."""
+    if employee_id:
+        return attendance.get_visits_by_employee(employee_id)
+    return attendance.get_visits(date)
 
 
 @app.get("/api/stats")

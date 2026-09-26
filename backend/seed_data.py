@@ -12,6 +12,7 @@ import glob
 import os
 from pathlib import Path
 
+from backend import attendance
 from backend import database as db
 from backend import security
 from backend.store import store
@@ -29,6 +30,9 @@ SEED_EMPLOYEES: list[dict] = [
         "role": "",
         "email": "",
         "phone": "",
+        # "office" = check-in/check-out with a 09:30 shift start.
+        # "field"  = delivery / ground crew, one visit per scan, no hours.
+        "category": "office",
         "photos": ["EMP001_1.jpg", "EMP001_2.jpg"],
     },
 ]
@@ -116,6 +120,7 @@ def seed_employees(engine) -> None:
                     key: security.encrypt_text(employee.get(key, "") or "")
                     for key in ("name", "department", "role", "email", "phone")
                 },
+                "category": attendance.normalise_category(employee.get("category")),
                 "face_available": 0,
                 "is_active": 1,
                 "created_at": security.encrypt_text(db.now_str()),

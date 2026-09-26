@@ -94,6 +94,8 @@ def public_employee(row: Any) -> dict:
         data[field] = decrypt_text(data.get(field)) or ""
     data["is_active"] = bool(data.get("is_active"))
     data["face_enrolled"] = bool(data.get("face_available"))
+    # Rows written before categories existed have no value; office is the default.
+    data["category"] = (data.get("category") or "office")
     data.pop("face_label", None)
     data.pop("face_available", None)
     return data
@@ -106,6 +108,18 @@ def public_attendance(row: Any) -> dict:
     for field in ("name", "department", "role"):
         if field in data:
             data[field] = decrypt_text(data.get(field)) or ""
+    return data
+
+
+def public_visit(row: Any) -> dict:
+    """Public shape of one field / ground crew visit row."""
+    data = dict(row)
+    for field in ("visited_at", "created_at"):
+        data[field] = decrypt_text(data.get(field))
+    for field in ("name", "department", "role"):
+        if field in data:
+            data[field] = decrypt_text(data.get(field)) or ""
+    data["category"] = data.get("category") or "field"
     return data
 
 

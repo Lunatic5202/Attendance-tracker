@@ -24,6 +24,12 @@ services:
         sync: false
       - key: MIN_CHECKOUT_HOURS
         value: "4"
+      - key: LATE_AT
+        value: "09:30"    # fixed office shift start; a later check-in is Late
+      - key: CHECKIN_BUFFER_SECONDS
+        value: "8"        # one check-in at a time, so two people cannot be recorded back to back
+      - key: FACE_THRESHOLD
+        value: "0.363"    # SFace cosine distance; lower = stricter
       - key: ADMIN_SESSION_TTL
         value: "28800"
       - key: SCAN_RATE_LIMIT

@@ -163,6 +163,7 @@ def _schema() -> list[str]:
             role          TEXT NOT NULL DEFAULT '',
             email         TEXT NOT NULL DEFAULT '',
             phone         TEXT NOT NULL DEFAULT '',
+            category      TEXT NOT NULL DEFAULT 'office',
             face_label    INTEGER UNIQUE,
             face_available INTEGER NOT NULL DEFAULT 0,
             is_active     INTEGER NOT NULL DEFAULT 1,
@@ -186,6 +187,23 @@ def _schema() -> list[str]:
         """,
         "CREATE INDEX IF NOT EXISTS idx_attendance_date ON attendance(date)",
         "CREATE INDEX IF NOT EXISTS idx_attendance_employee ON attendance(employee_id)",
+        # Field / ground crew sign in once per visit with no check-out, so this
+        # table deliberately has no UNIQUE(employee_id, date) constraint. It is
+        # kept apart from `attendance` so the office check-in/out invariant
+        # (one row per employee per day) is never weakened.
+        f"""
+        CREATE TABLE IF NOT EXISTS field_visits (
+            id          {identity},
+            employee_id TEXT NOT NULL,
+            date        TEXT NOT NULL,
+            visited_at  TEXT NOT NULL,
+            source      TEXT NOT NULL DEFAULT 'face',
+            created_at  TEXT NOT NULL,
+            FOREIGN KEY (employee_id) REFERENCES employees(id) ON DELETE CASCADE
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_field_visits_date ON field_visits(date)",
+        "CREATE INDEX IF NOT EXISTS idx_field_visits_employee ON field_visits(employee_id)",
     ]
 
 
@@ -223,6 +241,38 @@ def init_db() -> None:
         for statement in _schema() + _postgres_extra():
             conn.execute(statement)
         _migrate_legacy_plaintext(conn)
+        _migrate_add_category(conn)
+
+
+def _has_column(conn, table: str, column: str) -> bool:
+    """Whether ``table`` already has ``column`` (works on both engines)."""
+    if using_postgres():
+        return (
+            conn.execute(
+                """
+                SELECT 1 FROM information_schema.columns
+                WHERE table_schema = current_schema() AND table_name = ? AND column_name = ?
+                """,
+                (table, column),
+            ).fetchone()
+            is not None
+        )
+    return any(
+        str(row["name"]) == column
+        for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+    )
+
+
+def _migrate_add_category(conn) -> None:
+    """Add ``employees.category`` for databases created before categories.
+
+    ``ALTER TABLE ... ADD COLUMN ... NOT NULL DEFAULT`` is supported by both
+    SQLite and PostgreSQL, and supplies the default for existing rows, so every
+    employee already on file is treated as office staff.
+    """
+    if _has_column(conn, "employees", "category"):
+        return
+    conn.execute("ALTER TABLE employees ADD COLUMN category TEXT NOT NULL DEFAULT 'office'")
 
 
 def _migrate_legacy_plaintext(conn) -> None:
@@ -257,6 +307,7 @@ def _jsonable(value):
 def export_snapshot() -> dict:
     """Return the stored rows of every table, for backups."""
     tables = [table for table, _fields in _LEGACY_TABLES]
+    tables.append("field_visits")
     if using_postgres():
         tables.extend(("face_templates", "face_registry"))
     snapshot = {}

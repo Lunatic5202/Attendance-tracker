@@ -12,6 +12,9 @@ Instead of manually entering attendance, employees simply stand in front of a ca
 * 📷 **Face-based attendance**
 
   * Detect and recognize employees using a camera.
+* 🧠 **SFace recognition**
+
+  * Deep 128-dimensional face embeddings matched by cosine distance, instead of the older LBPH histogram model. Robust to lighting and much better at telling similar-looking people apart.
 * 🟢 **Automatic Check-In**
 
   * First successful scan of the day records the employee's check-in time.
@@ -21,12 +24,21 @@ Instead of manually entering attendance, employees simply stand in front of a ca
 * ⏱️ **Working Hours Calculation**
 
   * Automatically calculates the employee's total working duration.
+* 🕘 **Fixed 09:30 Shift Start**
+
+  * Office check-ins after `LATE_AT` (default **09:30**) are marked **Late**, on the server.
+* 🚚 **Field / Ground Crew Mode**
+
+  * Delivery and ground-crew staff are not on a shift: each scan logs a single **visit**, with no check-out, no hours and no late marking — as many visits per day as they make. Reported separately from office attendance.
+* ⏸️ **Check-In Buffer**
+
+  * After any check-in, the next one is refused for `CHECKIN_BUFFER_SECONDS` (default 8) so two people cannot be recorded at once. Server-enforced, with `Retry-After`.
 * 👥 **Employee Registration**
 
   * Add new employees and register their facial data.
 * 📊 **Attendance Records**
 
-  * View daily attendance and employee history.
+  * View daily attendance, field visits, and employee history.
 * 🖥️ **Admin Dashboard**
 
   * Manage employees and monitor attendance.
@@ -113,6 +125,33 @@ Rejected with         Calculate
 
 Employees do not need to manually select **Check In** or **Check Out**.
 
+#### Office vs. field / ground crew
+
+Every employee has a **Staff Type**, which changes how a scan is recorded:
+
+| | Office | Field / Ground Crew |
+|---|---|---|
+| Shift start | Fixed, `LATE_AT` (default **09:30**) | None — arrive any time |
+| Scan records | Check-in, then check-out | One **visit**, per scan |
+| Late marking | Yes, after 09:30 | Never |
+| Working hours | Calculated at check-out | Not applicable |
+| Multiple per day | No (one in/out pair) | Yes — three deliveries = three visits |
+
+Visits are kept in their own `field_visits` table and their own report section,
+Excel sheet and dashboard tile, so the office KPIs (present, late, average
+hours) always mean desk staff. Set the type when registering an employee, or
+change it later with `PATCH /api/employees/{id}`.
+
+#### Check-in buffer
+
+After any check-in or visit, further check-ins are refused for
+`CHECKIN_BUFFER_SECONDS` (default 8) with HTTP `429` and a `Retry-After`
+header. This stops the camera from reading the person still standing at the
+kiosk as a second check-in — which is also the moment mis-reads are most
+likely. Check-**out** is never buffered, so leaving is never delayed. Set the
+value to `0` to disable. It is in-process state, and the app runs a single
+worker, so no coordination is needed.
+
 ---
 
 ## 🛠️ Tech Stack
@@ -121,8 +160,39 @@ Employees do not need to manually select **Check In** or **Check Out**.
 
 * **Python**
 * **FastAPI** backend with signed, HttpOnly admin session cookies
-* **OpenCV** Haar cascade (detection) + LBPH (recognition)
+* **OpenCV** Haar cascade (detection) + **SFace** (recognition)
 * **cryptography** (Fernet) authenticated encryption for data at rest
+
+#### About the recognition model
+
+Recognition uses **SFace** (the 2021dec OpenCV model-zoo release): a deep model
+that maps a 112×112 face crop to a 128-dimensional embedding, matched by
+cosine distance. This replaced the older **LBPH** histogram model, which is
+noticeably weaker — SFace is far better at telling similar-looking people apart,
+which is the failure that actually matters at a check-in desk.
+
+Details worth knowing:
+
+* The stored "template" is a **512-byte embedding, not a picture** — 50× smaller
+  than an LBPH crop, and it is encrypted before it is written anywhere.
+* A match is the **lowest** distance across all of that person's stored
+  embeddings, so enrolling several photos of the same person measurably helps.
+* Crops get **CLAHE** lighting normalisation first, so dim or unevenly lit faces
+  still match. (Verified: a face darkened to 45% brightness still matched at
+  distance 0.195 against a 0.363 threshold.)
+* The model file (37 MB) is **downloaded and checksum-verified during the Docker
+  build**, not committed to git. If the download is wrong the build fails rather
+  than shipping a kiosk that cannot recognise anyone.
+* `FACE_THRESHOLD` is the accept/reject distance (default `0.363`, the
+  calibrated LFW-masked value). Lower it if wrong people are being accepted;
+  raise it if real staff are being refused.
+* Cosine distance is computed in NumPy rather than with `FaceRecognizerSF.match`,
+  which returns wrong values in current OpenCV 5 builds (it reports `1.0` for
+  identical embeddings).
+* **Anyone enrolled under the old LBPH model must re-enrol once.** LBPH crops
+  are detected by size and skipped, with a warning in the log; such an employee
+  is reported as *not enrolled* so the admin UI offers a re-enroll instead of
+  leaving them permanently unrecognisable.
 
 ### Database
 
@@ -446,16 +516,20 @@ Reject    Recognize
 * [x] Webcam integration
 * [x] Face detection
 * [x] Employee registration
-* [x] Face recognition
+* [x] Face recognition (SFace embeddings)
 * [x] Automatic check-in
 * [x] Automatic check-out
 
 ### Phase 2 — Attendance Management
 
 * [x] SQLite database
+* [x] PostgreSQL backend for ephemeral deploys
 * [x] Attendance history
 * [x] Working-hours calculation
 * [x] Duplicate scan prevention
+* [x] Fixed 09:30 shift start / late marking
+* [x] Check-in buffer (one person at a time)
+* [x] Field / ground crew visit tracking
 * [x] Employee management
 
 ### Phase 3 — Dashboard

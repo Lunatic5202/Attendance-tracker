@@ -54,6 +54,30 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
+def _peer(request) -> str:
+    return (request.client.host if request.client else "") or "unknown"
+
+
+def client_identity(request) -> str:
+    """Derive a rate-limit key for ``request``.
+
+    Behind a reverse proxy (Render, nginx, ...) ``request.client.host`` is the
+    proxy's own address, so every visitor would share one bucket and the kiosk
+    would lock itself out. ``X-Forwarded-For`` holds the real chain, but its
+    left-hand entries are caller-supplied and trivially spoofed.
+
+    Proxies *append* the address they actually saw to the right of that header,
+    so the rightmost entry is the one we trust; everything to its left is
+    ignored. Falls back to the socket peer when no proxy header is present.
+    """
+    forwarded = request.headers.get("x-forwarded-for", "")
+    if forwarded:
+        candidate = forwarded.rsplit(",", 1)[-1].strip()
+        if candidate:
+            return candidate
+    return _peer(request)
+
+
 scan_limiter = RateLimiter(
     limit=_env_int("SCAN_RATE_LIMIT", 10),
     window_seconds=_env_int("SCAN_RATE_WINDOW", 60),

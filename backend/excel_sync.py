@@ -21,7 +21,7 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
 from backend import onedrive
-from backend.security import public_attendance, public_employee
+from backend.security import public_attendance, public_employee, public_visit
 from backend.store import store
 
 log = logging.getLogger("excel_sync")
@@ -45,12 +45,24 @@ ATTENDANCE_COLUMNS = [
 EMPLOYEE_COLUMNS = [
     ("id", "Employee ID", 12),
     ("name", "Name", 26),
+    ("category", "Category", 12),
     ("department", "Department", 20),
     ("role", "Role", 20),
     ("email", "Email", 30),
     ("phone", "Phone", 16),
     ("face_enrolled", "Face Enrolled", 14),
     ("is_active", "Active", 10),
+]
+
+#: Field / ground crew have no check-in/check-out pair, so they get their own
+#: sheet: one row per visit rather than one row per person per day.
+VISIT_COLUMNS = [
+    ("date", "Date", 12),
+    ("employee_id", "Employee ID", 12),
+    ("name", "Name", 26),
+    ("department", "Department", 20),
+    ("visited_at", "Visit Time", 22),
+    ("source", "Source", 9),
 ]
 
 
@@ -86,6 +98,10 @@ def build_workbook() -> tuple[bytes, dict]:
         row["check_in"] = _fmt_time(row.get("check_in"))
         row["check_out"] = _fmt_time(row.get("check_out"))
 
+    visit_rows = [public_visit(row) for row in store.field_visits_all()]
+    for row in visit_rows:
+        row["visited_at"] = _fmt_time(row.get("visited_at"))
+
     employee_rows = [public_employee(row) for row in store.employees()]
 
     wb = Workbook()
@@ -103,20 +119,24 @@ def build_workbook() -> tuple[bytes, dict]:
         cell.fill = HEADER_FILL
     ws["A5"] = "Attendance"
     ws["B5"] = len(attendance_rows)
-    ws["A6"] = "Employees"
-    ws["B6"] = len(employee_rows)
+    ws["A6"] = "Field Visits"
+    ws["B6"] = len(visit_rows)
+    ws["A7"] = "Employees"
+    ws["B7"] = len(employee_rows)
     ws.column_dimensions["A"].width = 22
     ws.column_dimensions["B"].width = 12
 
     attendance_count = _add_sheet(wb, "Attendance", ATTENDANCE_COLUMNS, attendance_rows)
+    visit_count = _add_sheet(wb, "Field Visits", VISIT_COLUMNS, visit_rows)
     employee_count = _add_sheet(wb, "Employees", EMPLOYEE_COLUMNS, employee_rows)
 
     buffer = io.BytesIO()
     wb.save(buffer)
     info = {
         "attendance_rows": attendance_count,
+        "visit_rows": visit_count,
         "employee_rows": employee_count,
-        "sheets": ["Summary", "Attendance", "Employees"],
+        "sheets": ["Summary", "Attendance", "Field Visits", "Employees"],
     }
     return buffer.getvalue(), info
 
