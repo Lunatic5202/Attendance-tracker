@@ -11,7 +11,7 @@ os.environ["ATTENDANCE_DATA"] = tempfile.mkdtemp(prefix="attendance-seed-tests-"
 os.environ["ATTENDANCE_DB"] = os.path.join(os.environ["ATTENDANCE_DATA"], "test.db")
 os.environ["SEED_FACE_DIR"] = tempfile.mkdtemp(prefix="attendance-seed-faces-")
 
-from backend import database as db
+from backend import database as db, security
 from backend import seed_data
 from backend.store import store
 
@@ -31,13 +31,19 @@ ROSTER = [
 
 
 class StubEngine:
-    def __init__(self, result=True):
+    def __init__(self, result=True, known=()):
         self.result = result
+        self.known = set(known)
         self.calls = []
 
     def enroll_many(self, label, frames):
         self.calls.append((label, len(frames)))
+        if self.result:
+            self.known.add(label)
         return self.result
+
+    def has(self, label):
+        return label in self.known
 
 
 class SeedEmployeeTests(unittest.TestCase):
@@ -74,6 +80,58 @@ class SeedEmployeeTests(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["face_available"], 0)
         self.assertIsNone(rows[0]["face_label"])
+
+    def test_persisted_employee_loses_no_face_after_container_reset(self):
+        store.insert_employee(
+            {
+                "id": "EMP001",
+                **{
+                    key: security.encrypt_text(value)
+                    for key, value in (
+                        ("name", "Asha Rao"),
+                        ("department", "Operations"),
+                        ("role", "Engineer"),
+                        ("email", "asha@example.com"),
+                        ("phone", "123"),
+                    )
+                },
+                "face_label": 1,
+                "face_available": 1,
+                "is_active": 1,
+                "created_at": security.encrypt_text("08:00:00"),
+            }
+        )
+        engine = StubEngine(result=True, known=set())
+        seed_data.seed_employees(engine)
+        row = store.get_employee("EMP001")
+        self.assertEqual(engine.calls, [(1, 1)], "the face must be re-enrolled with the same label")
+        self.assertEqual(row["face_label"], 1)
+        self.assertEqual(row["face_available"], 1)
+        self.assertEqual(len(store.employees()), 1)
+
+    def test_intact_face_is_not_enrolled_again(self):
+        store.insert_employee(
+            {
+                "id": "EMP001",
+                **{
+                    key: security.encrypt_text(value)
+                    for key, value in (
+                        ("name", "Asha Rao"),
+                        ("department", "Operations"),
+                        ("role", "Engineer"),
+                        ("email", "asha@example.com"),
+                        ("phone", "123"),
+                    )
+                },
+                "face_label": 1,
+                "face_available": 1,
+                "is_active": 1,
+                "created_at": security.encrypt_text("08:00:00"),
+            }
+        )
+        engine = StubEngine(result=True, known={1})
+        seed_data.seed_employees(engine)
+        self.assertEqual(engine.calls, [], "an intact template must not be re-enrolled")
 
     def test_blank_entries_are_skipped(self):
         seed_data.SEED_EMPLOYEES = [{"id": "EMP002", "name": "  ", "photos": []}]

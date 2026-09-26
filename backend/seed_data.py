@@ -78,6 +78,26 @@ def _has_photos(employee: dict) -> bool:
     )
 
 
+def _restore_missing_face(row, employee, engine) -> None:
+    """Re-enroll a stored employee's face when its template is gone.
+
+    The roster can outlive the face templates when the roster lives in an
+    external database but the templates live on an ephemeral container disk.
+    The existing label is reused so other employees' labels are unaffected.
+    """
+    label = row["face_label"]
+    if label is None or not hasattr(engine, "has") or not hasattr(engine, "enroll_many"):
+        return
+    if engine.has(label):
+        return
+    frames = _frames(employee.get("photos", []))
+    if not frames:
+        return
+    if engine.enroll_many(label, frames):
+        store.set_face_available(row["id"], 1)
+        print(f"[seed] restored face template for {row['id']}")
+
+
 def seed_employees(engine) -> None:
     if not _enabled():
         return
@@ -86,7 +106,9 @@ def seed_employees(engine) -> None:
         if not employee_id or not employee.get("name", "").strip():
             continue
         try:
-            if store.get_employee(employee_id) is not None:
+            existing = store.get_employee(employee_id)
+            if existing is not None:
+                _restore_missing_face(existing, employee, engine)
                 continue
             record = {
                 "id": employee_id,
