@@ -130,6 +130,11 @@ def _pool():
             DATABASE_URL,
             min_size=0,
             max_size=int(os.getenv("PG_POOL_MAX", "5")),
+            # Neon/Supabase/Render pooled endpoints terminate in PgBouncer, which
+            # does not support server-side prepared statements. psycopg3 would
+            # otherwise switch to them after 5 executions of a query and fail at
+            # runtime. prepare_threshold=None keeps every execution unnamed.
+            kwargs={"prepare_threshold": None},
             open=True,
         )
     return _POOL
