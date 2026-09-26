@@ -23,10 +23,14 @@ export default function Scan() {
   const [asleep, setAsleep] = useState(false)
   const [camError, setCamError] = useState(null)
   const [last, setLast] = useState(null)
+  const [confirmation, setConfirmation] = useState(null)
   const [log, setLog] = useState([
     { t: 'SYS', s: 'attendance relay online — awaiting camera frames…', tone: '' },
   ])
   const lock = useRef(false)
+  const confirmationRef = useRef(null)
+  const confirmationTimer = useRef(null)
+  const audioContextRef = useRef(null)
   const logBox = useRef(null)
   const asleepRef = useRef(false)
   const lastActivity = useRef(Date.now())
@@ -56,11 +60,16 @@ export default function Scan() {
     if (logBox.current) logBox.current.scrollTop = logBox.current.scrollHeight
   }, [log])
 
+  useEffect(() => () => {
+    clearTimeout(confirmationTimer.current)
+    audioContextRef.current?.close().catch(() => {})
+  }, [])
+
   const pushLog = (t, s, tone = '') =>
     setLog((cur) => [...cur.slice(-29), { t, s, tone }])
 
   const runScan = useCallback(async (image) => {
-    if (lock.current || asleepRef.current) return
+    if (lock.current || asleepRef.current || confirmationRef.current) return
     lock.current = true
     try {
       handleResult(await api.scan(image, undefined))
@@ -71,6 +80,57 @@ export default function Scan() {
     }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
+  function closeConfirmation() {
+    clearTimeout(confirmationTimer.current)
+    confirmationRef.current = null
+    setConfirmation(null)
+  }
+
+  function playConfirmationTone(kind, late = false) {
+    if (typeof window === 'undefined') return
+    const AudioContext = window.AudioContext || window.webkitAudioContext
+    if (!AudioContext) return
+
+    try {
+      const context = audioContextRef.current || new AudioContext()
+      audioContextRef.current = context
+      const start = context.currentTime + 0.02
+      const notes = late
+        ? [{ frequency: 392, at: 0, length: .14 }, { frequency: 330, at: .12, length: .2 }]
+        : kind === 'check-out'
+          ? [{ frequency: 440, at: 0, length: .14 }, { frequency: 659.25, at: .11, length: .22 }]
+          : [{ frequency: 523.25, at: 0, length: .14 }, { frequency: 659.25, at: .1, length: .14 }, { frequency: 783.99, at: .2, length: .25 }]
+
+      notes.forEach(({ frequency, at, length }) => {
+        const oscillator = context.createOscillator()
+        const gain = context.createGain()
+        oscillator.type = late ? 'sine' : 'triangle'
+        oscillator.frequency.setValueAtTime(frequency, start + at)
+        gain.gain.setValueAtTime(0.0001, start + at)
+        gain.gain.exponentialRampToValueAtTime(late ? 0.035 : 0.045, start + at + 0.012)
+        gain.gain.exponentialRampToValueAtTime(0.0001, start + at + length)
+        oscillator.connect(gain)
+        gain.connect(context.destination)
+        oscillator.start(start + at)
+        oscillator.stop(start + at + length + 0.03)
+      })
+      if (context.state === 'suspended') context.resume().catch(() => {})
+    } catch {
+      // Audio is an enhancement; a browser policy should never interrupt scanning.
+    }
+  }
+
+  function openConfirmation(data) {
+    clearTimeout(confirmationTimer.current)
+    confirmationRef.current = data
+    setConfirmation(data)
+    playConfirmationTone(data.kind, data.late)
+    confirmationTimer.current = setTimeout(() => {
+      confirmationRef.current = null
+      setConfirmation(null)
+    }, 5200)
+  }
+
   function handleResult(res) {
     const action = res.action || 'UNKNOWN'
     const now = star()
@@ -78,6 +138,12 @@ export default function Scan() {
     if (res.employee) poke()
 
     if (action === 'CHECK-IN') {
+      openConfirmation({
+        kind: 'check-in',
+        employee: res.employee,
+        time: now,
+        late: res.attendance?.status === 'Late',
+      })
       pushLog('SCAN', `${res.employee?.name} — CHECK-IN @${now}`, 'ok-line')
       toast(`${res.employee?.name} checked in · ${now}`, { ok: true })
     } else if (action === 'VISIT') {
@@ -85,6 +151,12 @@ export default function Scan() {
       toast(`${res.employee?.name} visit logged · ${now}`, { ok: true })
     } else if (action === 'CHECK-OUT') {
       const hrs = res.attendance?.hours_fmt || '—'
+      openConfirmation({
+        kind: 'check-out',
+        employee: res.employee,
+        time: now,
+        hours: hrs,
+      })
       pushLog('SCAN', `${res.employee?.name} — CHECK-OUT @${now} (${hrs})`, 'ok-line')
       toast(`${res.employee?.name} checked out · ${hrs}`, { ok: true })
     } else if (action === 'WAIT') {
@@ -104,6 +176,9 @@ export default function Scan() {
   }
 
   const meta = actions[last?.action] || actions.UNKNOWN
+  const greeting = confirmation
+    ? new Date().getHours() < 12 ? 'Good morning' : new Date().getHours() < 17 ? 'Good afternoon' : 'Good evening'
+    : ''
 
   return (
     <div className="page">
@@ -206,6 +281,34 @@ export default function Scan() {
           Only administrator-enrolled faces can create attendance records. Check-out unlocks after the configured work buffer.
         </span>
       </div>
+
+      {confirmation && (
+        <div className={`confirmation-backdrop ${confirmation.late ? 'late' : ''}`} role="dialog" aria-modal="true" aria-labelledby="confirmation-title" onMouseDown={(e) => e.target === e.currentTarget && closeConfirmation()}>
+          <div className={`confirmation-dialog ${confirmation.kind} ${confirmation.late ? 'is-late' : ''}`}>
+            <button className="confirmation-close" onClick={closeConfirmation} aria-label="Close confirmation">×</button>
+            <div className="confirmation-icon" aria-hidden="true">
+              <svg viewBox="0 0 52 52" focusable="false">
+                <circle className="confirmation-circle" cx="26" cy="26" r="23" />
+                <path className="confirmation-check" d="M14 27.5 22 35l16-18" />
+              </svg>
+            </div>
+            <div className="confirmation-kicker">{confirmation.late ? 'Late arrival noted' : confirmation.kind === 'check-in' ? 'Attendance recorded' : 'Day complete'}</div>
+            <h2 id="confirmation-title">
+              {confirmation.late ? 'You made it.' : greeting}, <b>{confirmation.employee?.name?.split(' ')[0] || 'there'}</b>
+            </h2>
+            <p className="confirmation-message">
+              {confirmation.late
+                ? `Your check-in was recorded at ${confirmation.time}. We marked this arrival as late.`
+                : confirmation.kind === 'check-in'
+                  ? `You’re checked in for today at ${confirmation.time}. Have a great day!`
+                  : `You’re checked out at ${confirmation.time}. You worked ${confirmation.hours}. See you next time!`}
+            </p>
+            {confirmation.late && <div className="late-note"><span className="late-spark">✦</span> Late arrival recorded — no further action needed.</div>}
+            <button className={`btn confirmation-button ${confirmation.late ? 'bolt' : ''}`} onClick={closeConfirmation}>Continue</button>
+            <div className="confirmation-auto-close">closing automatically</div>
+          </div>
+        </div>
+      )}
 
       {asleep && (
         <div className="kiosk-standby">
