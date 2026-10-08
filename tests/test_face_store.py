@@ -37,6 +37,47 @@ class FileFaceStoreTests(unittest.TestCase):
         self.store.save(1, [b"only"])
         self.assertEqual(list(self.store.iter_templates()), [(1, b"only")])
 
+    def test_append_keeps_the_existing_templates(self):
+        self.store.save(1, [b"original"])
+        self.store.append(1, [b"added"])
+        self.assertCountEqual(list(self.store.iter_templates()), [(1, b"original"), (1, b"added")])
+
+    def test_append_after_multi_save_avoids_index_collisions(self):
+        self.store.save(2, [b"a", b"b"])
+        self.store.append(2, [b"c", b"d"])
+        blobs = [blob for label, blob in self.store.iter_templates() if label == 2]
+        self.assertEqual(blobs, [b"a", b"b", b"c", b"d"])
+        self.assertEqual(len(set(self.store._paths(2))), len(self.store._paths(2)))
+
+    def test_append_survives_a_later_append(self):
+        self.store.save(3, [b"first"])
+        self.store.append(3, [b"second"])
+        self.store.append(3, [b"third"])
+        blobs = [blob for label, blob in self.store.iter_templates() if label == 3]
+        self.assertCountEqual(blobs, [b"first", b"second", b"third"])
+
+    def test_append_then_save_still_replaces_everything(self):
+        self.store.save(1, [b"a"])
+        self.store.append(1, [b"b"])
+        self.store.save(1, [b"fresh"])
+        self.assertEqual(list(self.store.iter_templates()), [(1, b"fresh")])
+
+    def test_append_changes_the_signature(self):
+        self.store.save(1, [b"one"])
+        before = self.store.signature()
+        self.store.append(1, [b"two"])
+        self.assertNotEqual(self.store.signature(), before)
+
+    def test_append_touches_no_other_label(self):
+        self.store.save(1, [b"one"])
+        self.store.save(10, [b"ten"])
+        self.store.append(1, [b"one-more"])
+        self.assertEqual(dict(self.store.iter_templates())[10], b"ten")
+        self.assertCountEqual(
+            [(label, blob) for label, blob in self.store.iter_templates() if label == 1],
+            [(1, b"one"), (1, b"one-more")],
+        )
+
     def test_clearing_one_label_keeps_similar_labels(self):
         self.store.save(1, [b"one"])
         self.store.save(10, [b"ten"])

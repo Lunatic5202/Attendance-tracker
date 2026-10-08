@@ -17,6 +17,8 @@ export default function CameraCapture({
   motionThreshold = 0.05,
   onMotion,
   onError,
+  burst = 1,
+  onBurst,
 }) {
   const videoRef = useRef(null)
   const [error, setError] = useState(null)
@@ -55,15 +57,36 @@ export default function CameraCapture({
   }, [active, onError])
 
   useEffect(() => {
-    if (!ready || !onFrame || !videoRef.current) return
-    const timer = setInterval(() => {
+    if (!ready || (!onFrame && !onBurst) || !videoRef.current) return
+    const grab = () => {
       const v = videoRef.current
-      if (v && v.readyState >= 2 && v.videoWidth > 0) {
-        onFrame(captureDataURL(v))
+      if (v && v.readyState >= 2 && v.videoWidth > 0) return captureDataURL(v)
+      return null
+    }
+    const timer = setInterval(() => {
+      if (onBurst && burst > 1) {
+        // Short burst: the backend votes across frames, so one smeared or
+        // badly lit frame no longer fails the whole scan.
+        const frames = []
+        let taken = 0
+        const collect = () => {
+          const frame = grab()
+          if (frame) frames.push(frame)
+          taken += 1
+          if (taken < burst) {
+            setTimeout(collect, 250)
+          } else if (frames.length) {
+            onBurst(frames)
+          }
+        }
+        collect()
+      } else {
+        const frame = grab()
+        if (frame && onFrame) onFrame(frame)
       }
     }, 2600)
     return () => clearInterval(timer)
-  }, [ready, onFrame])
+  }, [ready, onFrame, onBurst, burst])
 
   useEffect(() => {
     if (!watch || !ready || !videoRef.current) return

@@ -47,9 +47,23 @@ export const api = {
     }
     return res.json()
   },
+  // Additive enrollment: appends samples without ever replacing stored ones.
+  addFaceSamples: async (id, files) => {
+    const form = new FormData()
+    for (const file of files) form.append('files', file)
+    const res = await fetch(`${BASE}/employees/${id}/face/add`, { method: 'POST', body: form })
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}))
+      throw new Error(data.detail || 'Adding face samples failed')
+    }
+    return res.json()
+  },
 
-  scan: (image, employeeId) =>
-    req('/attendance/scan', { method: 'POST', body: JSON.stringify({ image, employee_id: employeeId }) }),
+  // Accepts a single frame or a burst; the backend votes across frames.
+  scan: (images, employeeId) => {
+    const frames = Array.isArray(images) ? images : [images]
+    return req('/attendance/scan', { method: 'POST', body: JSON.stringify({ images: frames, employee_id: employeeId }) })
+  },
   manual: (employeeId, action) =>
     req('/attendance/manual', { method: 'POST', body: JSON.stringify({ employee_id: employeeId, action }) }),
 

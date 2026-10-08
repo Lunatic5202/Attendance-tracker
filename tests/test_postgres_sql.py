@@ -418,6 +418,22 @@ class PostgresFaceStoreSqlTests(unittest.TestCase):
             f"expected a version bump, saw {seen}",
         )
 
+    def test_postgres_face_store_append_emits_valid_sql(self):
+        from backend.face_store import PostgresFaceStore
+
+        seen = []
+        store = PostgresFaceStore()
+        with patch.object(
+            db, "get_conn", lambda: RecordingOnlyConnection(seen, [{"m": 4}])
+        ):
+            store.append(5, [b"a", b"b"])
+
+        self.assertTrue(any("MAX(idx)" in sql for sql in seen), f"saw {seen}")
+        self.assertEqual(sum("INSERT INTO face_templates" in sql for sql in seen), 2)
+        self.assertTrue(any("ON CONFLICT" in sql for sql in seen), f"saw {seen}")
+        for sql in seen:
+            parse_as_postgres(sql)
+
 
 class FaceStoreSelectionTests(unittest.TestCase):
     def test_sqlite_selects_the_file_store(self):

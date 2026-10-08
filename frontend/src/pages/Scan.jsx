@@ -8,6 +8,7 @@ const actions = {
   'CHECK-OUT': { label: 'Check-Out', cls: 'out', icon: '→' },
   VISIT: { label: 'Visit Logged', cls: 'in', icon: '→' },
   UNKNOWN: { label: 'Unknown Face', cls: 'idle', icon: '?' },
+  LOW_QUALITY: { label: 'Adjust Camera', cls: 'warn', icon: '◎' },
   DUPLICATE_SCAN: { label: 'Duplicate Rejected', cls: 'idle', icon: '!' },
   CHECKOUT_TOO_EARLY: { label: 'Check-Out Held', cls: 'warn', icon: '⏱' },
   WAIT: { label: 'One At A Time', cls: 'warn', icon: '⏱' },
@@ -68,11 +69,11 @@ export default function Scan() {
   const pushLog = (t, s, tone = '') =>
     setLog((cur) => [...cur.slice(-29), { t, s, tone }])
 
-  const runScan = useCallback(async (image) => {
+  const runScan = useCallback(async (frames) => {
     if (lock.current || asleepRef.current || confirmationRef.current) return
     lock.current = true
     try {
-      handleResult(await api.scan(image, undefined))
+      handleResult(await api.scan(frames, undefined))
     } catch (e) {
       handleResult(e.data || {})
     } finally {
@@ -170,6 +171,9 @@ export default function Scan() {
       toast(`Check-out held${unlocks}`)
     } else if (action === 'UNKNOWN') {
       pushLog('VERIFY', res.message || 'face did not match any template', 'err-line')
+    } else if (action === 'LOW_QUALITY') {
+      pushLog('VERIFY', res.message || 'image quality too low', 'err-line')
+      toast(res.message || 'Poor image quality — try again')
     } else if (action === 'DEMO_NEEDS_EMPLOYEE') {
       pushLog('VERIFY', 'camera/demo mode — use simulate below', 'err-line')
     }
@@ -204,7 +208,8 @@ export default function Scan() {
             motionThreshold={0.05}
             onMotion={onMotion}
             onError={setCamError}
-            onFrame={runScan}
+            onBurst={runScan}
+            burst={3}
           />
           <div className="cam-caption">
             <span>TARGET FRAME — HOLD STILL</span>

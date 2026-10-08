@@ -5,11 +5,18 @@ import { toast } from '../components/Toast'
 
 function EnrollModal({ employee, onClose, onDone }) {
   const first = !employee.face_enrolled
+  // Already enrolled -> default to ADDING samples; replacing is opt-in so a
+  // routine update can never wipe the stored templates.
+  const [method, setMethod] = useState('add')
   const [busy, setBusy] = useState(false)
   const [lastShot, setLastShot] = useState(null)
   const [mode, setMode] = useState('camera')
   const [picked, setPicked] = useState([])
   const [previews, setPreviews] = useState([])
+
+  const adding = !first && method === 'add'
+  const uploadAllowed = first || adding
+  const useUpload = uploadAllowed && mode === 'upload'
 
   const capture = useCallback((dataUrl) => setLastShot(dataUrl), [])
 
@@ -19,12 +26,17 @@ function EnrollModal({ employee, onClose, onDone }) {
   )
 
   async function submit() {
-    if (mode === 'upload') {
+    if (useUpload) {
       if (!picked.length) return toast('Choose at least one picture first')
       setBusy(true)
       try {
-        await api.enrollFaces(employee.id, picked)
-        toast(`Enrolled ${picked.length} picture(s) for ${employee.name}`, { ok: true })
+        if (adding) {
+          const res = await api.addFaceSamples(employee.id, picked)
+          toast(`Added ${res.added ?? picked.length} sample(s) for ${employee.name}`, { ok: true })
+        } else {
+          await api.enrollFaces(employee.id, picked)
+          toast(`Enrolled ${picked.length} picture(s) for ${employee.name}`, { ok: true })
+        }
         onDone()
         onClose()
       } catch (e) {
@@ -37,8 +49,14 @@ function EnrollModal({ employee, onClose, onDone }) {
     if (!lastShot) return toast('Hold still and capture a frame first')
     setBusy(true)
     try {
-      await api.enrollFace(employee.id, lastShot)
-      toast(`Face enrolled for ${employee.name}`, { ok: true })
+      if (adding) {
+        const blob = await (await fetch(lastShot)).blob()
+        await api.addFaceSamples(employee.id, [blob])
+        toast(`Sample added for ${employee.name}`, { ok: true })
+      } else {
+        await api.enrollFace(employee.id, lastShot)
+        toast(`Face enrolled for ${employee.name}`, { ok: true })
+      }
       onDone()
       onClose()
     } catch (e) {
@@ -56,11 +74,23 @@ function EnrollModal({ employee, onClose, onDone }) {
     setPreviews(files.map((f) => URL.createObjectURL(f)))
   }
 
+  const submitLabel = busy
+    ? 'Saving…'
+    : useUpload
+      ? adding
+        ? `Add Sample${picked.length ? ` (${picked.length})` : ''}`
+        : `Upload & Enroll${picked.length ? ` (${picked.length})` : ''}`
+      : first
+        ? 'Capture & Enroll Face'
+        : adding
+          ? 'Add This Sample'
+          : 'Capture & Re-Enroll Face'
+
   return (
     <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div className="modal">
         <div className="mhead">
-          <h3>Enroll Face · {employee.id}</h3>
+          <h3>{adding ? 'Add Face Samples' : 'Enroll Face'} · {employee.id}</h3>
           <button className="x-btn" onClick={onClose}>✕</button>
         </div>
         <div className="mbody">
@@ -69,28 +99,27 @@ function EnrollModal({ employee, onClose, onDone }) {
             <span className="badge plain">{employee.department}</span>
           </div>
 
-          {first && (
+          {!first && (
+            <div className="seg" style={{ marginBottom: '0.9rem' }}>
+              <button className={`seg-btn ${method === 'add' ? 'on' : ''}`} onClick={() => setMethod('add')}>Add samples</button>
+              <button className={`seg-btn ${method === 'replace' ? 'on' : ''}`} onClick={() => setMethod('replace')}>Replace (re-enroll)</button>
+            </div>
+          )}
+
+          {uploadAllowed && (
             <div className="seg" style={{ marginBottom: '0.9rem' }}>
               <button className={`seg-btn ${mode === 'camera' ? 'on' : ''}`} onClick={() => setMode('camera')}>Use camera</button>
               <button className={`seg-btn ${mode === 'upload' ? 'on' : ''}`} onClick={() => setMode('upload')}>Upload picture(s)</button>
             </div>
           )}
 
-          {mode === 'camera' ? (
-            <>
-              <CameraCapture active={!busy} onFrame={capture} />
-              <p className="muted" style={{ fontSize: '0.82rem', marginTop: '0.8rem' }}>
-                Look straight at the camera. The latest captured frame appears below and is enrolled
-                on submit. Only a compact embedding is stored.
-              </p>
-              {lastShot && <img src={lastShot} alt="face" style={{ width: '100%', maxHeight: 220, objectFit: 'cover', borderRadius: 'var(--radius)', border: '1px solid var(--line)' }} />}
-            </>
-          ) : (
+          {useUpload ? (
             <>
               <input type="file" multiple accept="image/*" onChange={pick} className="input" style={{ padding: '0.6rem' }} />
               <p className="muted" style={{ fontSize: '0.82rem', marginTop: '0.8rem' }}>
-                Pick one or more clear, front-facing pictures of the employee. This option is only
-                available for the first enrollment.
+                {adding
+                  ? 'Pick clear, front-facing pictures. Existing samples are kept — new ones are added alongside them.'
+                  : 'Pick one or more clear, front-facing pictures of the employee. This option is only available for the first enrollment.'}
               </p>
               {previews.length > 0 && (
                 <div className="row" style={{ gap: '0.5rem', flexWrap: 'wrap', marginTop: '0.5rem' }}>
@@ -101,14 +130,22 @@ function EnrollModal({ employee, onClose, onDone }) {
                 </div>
               )}
             </>
+          ) : (
+            <>
+              <CameraCapture active={!busy} onFrame={capture} />
+              <p className="muted" style={{ fontSize: '0.82rem', marginTop: '0.8rem' }}>
+                {adding
+                  ? 'Look straight at the camera, then submit. The sample is added without touching the ones already stored.'
+                  : 'Look straight at the camera. The latest captured frame appears below and is enrolled on submit. Only a compact embedding is stored.'}
+              </p>
+              {lastShot && <img src={lastShot} alt="face" style={{ width: '100%', maxHeight: 220, objectFit: 'cover', borderRadius: 'var(--radius)', border: '1px solid var(--line)' }} />}
+            </>
           )}
         </div>
         <div className="mfoot">
           <button className="btn ghost" onClick={onClose}>Cancel</button>
-          <button className="btn" onClick={submit} disabled={busy || (mode === 'camera' && !lastShot)}>
-            {busy
-              ? (mode === 'upload' ? 'Enrolling…' : 'Enrolling…')
-              : (mode === 'upload' ? `Upload & Enroll${picked.length ? ` (${picked.length})` : ''}` : (first ? 'Capture & Enroll Face' : 'Capture & Re-Enroll Face'))}
+          <button className="btn" onClick={submit} disabled={busy || (useUpload ? !picked.length : !lastShot)}>
+            {submitLabel}
           </button>
         </div>
       </div>
@@ -288,7 +325,7 @@ export default function Employees() {
                   <td>
                     <div className="row" style={{ justifyContent: 'flex-end', gap: '0.4rem' }}>
                       <button className="btn sm ghost" onClick={() => setEnrolling(e)}>
-                        {e.face_enrolled ? 'Re-enroll' : 'Enroll'}
+                        {e.face_enrolled ? 'Update Face' : 'Enroll'}
                       </button>
                       <button className="btn sm ghost" onClick={() => toggleActive(e, e.id)}>
                         {e.is_active ? 'Disable' : 'Enable'}

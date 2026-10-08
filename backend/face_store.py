@@ -58,6 +58,29 @@ class FileFaceStore:
                 (self.faces_dir / f"{label}-{index}.enc").write_bytes(blob)
         self.mark(label)
 
+    def count(self, label: int) -> int:
+        return sum(1 for path in self._paths(label) if path.suffix == ".enc")
+
+    def _next_index(self, label: int) -> int:
+        """First free ``{label}-{i}.enc`` index, whatever layout exists now."""
+        nxt = 0
+        for path in self._paths(label):
+            if path.suffix != ".enc":
+                continue
+            tail = path.stem.split("-", 1)[1] if "-" in path.stem else "-1"
+            try:
+                nxt = max(nxt, int(tail) + 1)
+            except ValueError:
+                continue
+        return nxt
+
+    def append(self, label: int, blobs: list[bytes]) -> None:
+        """Add templates for ``label`` without touching the existing ones."""
+        index = self._next_index(label)
+        for offset, blob in enumerate(blobs):
+            (self.faces_dir / f"{label}-{index + offset}.enc").write_bytes(blob)
+        self.mark(label)
+
     def mark(self, label: int) -> None:
         (self.faces_dir / f"{label}.meta").write_text("registered", encoding="utf-8")
 
@@ -102,6 +125,35 @@ class PostgresFaceStore:
                 conn.execute(
                     "INSERT INTO face_templates (label, idx, data) VALUES (?, ?, ?)",
                     (label, index, blob),
+                )
+            conn.execute(
+                """
+                INSERT INTO face_registry (label, version) VALUES (?, 1)
+                ON CONFLICT (label) DO UPDATE SET version = face_registry.version + 1
+                """,
+                (label,),
+            )
+        self._signature = None
+
+    def count(self, label: int) -> int:
+        with db.get_conn() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) AS c FROM face_templates WHERE label = ?", (label,)
+            ).fetchone()
+        return int(row["c"])
+
+    def append(self, label: int, blobs: list[bytes]) -> None:
+        """Add templates for ``label`` without touching the existing ones."""
+        with db.get_conn() as conn:
+            row = conn.execute(
+                "SELECT COALESCE(MAX(idx), -1) AS m FROM face_templates WHERE label = ?",
+                (label,),
+            ).fetchone()
+            next_idx = int(row["m"]) + 1
+            for offset, blob in enumerate(blobs):
+                conn.execute(
+                    "INSERT INTO face_templates (label, idx, data) VALUES (?, ?, ?)",
+                    (label, next_idx + offset, blob),
                 )
             conn.execute(
                 """

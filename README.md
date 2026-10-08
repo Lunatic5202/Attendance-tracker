@@ -194,6 +194,27 @@ Details worth knowing:
   is reported as *not enrolled* so the admin UI offers a re-enroll instead of
   leaving them permanently unrecognisable.
 
+Improvements that never touch stored templates:
+
+* **Additive enrollment** — the *Add samples* path appends new embeddings to a
+  person's existing ones without ever deleting them; near-duplicate poses are
+  skipped and the per-person cap (default 5) is enforced by refusing further
+  additions, not by evicting. Because a match is the lowest distance across all
+  of a person's templates, every added sample makes recognition more forgiving.
+* **Quality gates** — scans that are blurry, too dark, too bright, or with the
+  face too small are answered with an actionable `LOW_QUALITY` message ("hold
+  still", "move closer") instead of a silent reject.
+* **Multi-frame scans** — the kiosk sends a short 3-frame burst per attempt;
+  the backend only accepts a label that wins a majority, so one smeared frame
+  no longer fails a real person and one lucky frame can no longer clock a
+  stranger in.
+* **Ambiguity gate** — when the two best matches are closer together than
+  `FACE_MARGIN` (default `0.04`), the scan is rejected rather than guessed.
+* **YuNet detector** — set `FACE_DETECTOR=yunet` to replace the Haar cascade
+  with the tiny YuNet DNN, which is markedly better at side angles and partial
+  faces. Storage is untouched; validate it on live scans before making it the
+  default for a site. The model ships in the Docker image next to SFace.
+
 ### Database
 
 * **PostgreSQL** — set `DATABASE_URL`. Required for ephemeral hosts (Render free, Heroku, most PaaS) because the container filesystem is wiped on every deploy, which deletes local data.

@@ -102,6 +102,7 @@ class EmployeeUpdate(BaseModel):
 
 class ScanRequest(BaseModel):
     image: str | None = Field(None, max_length=4_000_000)  # base64 frame from the browser camera
+    images: list[str] | None = Field(None, max_length=8)  # short burst; voted server-side
     employee_id: str | None = None  # explicit id, only honoured by demo engine
 
 
@@ -146,6 +147,28 @@ def _decode_image(payload: str | None, upload: UploadFile | None = None):
     return frame
 
 
+def _decode_frames(body: ScanRequest) -> list:
+    """Decode every frame attached to a scan request.
+
+    In a burst a single corrupt frame should not sink the whole scan, so bad
+    frames are dropped as long as at least one decodes.
+    """
+    payloads = body.images if body.images else ([body.image] if body.image else [])
+    frames = []
+    rejected = 0
+    for payload in payloads:
+        try:
+            frame = _decode_image(payload)
+        except HTTPException:
+            rejected += 1
+            continue
+        if frame is not None:
+            frames.append(frame)
+    if not frames and rejected:
+        raise HTTPException(400, "None of the provided image frames could be decoded.")
+    return frames
+
+
 def _employee_list():
     return [public_employee(r) for r in store.employees()]
 
@@ -164,6 +187,7 @@ def health():
     return {
         "status": "ok",
         "face_engine": engine.name,
+        "face_detector": getattr(engine, "detector_name", None),
         "database": "postgres" if db.using_postgres() else "sqlite",
         **security_status(),
     }
@@ -362,6 +386,48 @@ async def upload_enrollment_face(
     return {"detail": f"Enrolled {len(frames)} picture(s) for {employee_id}.", "face_enrolled": True}
 
 
+@app.post("/api/employees/{employee_id}/face/add")
+async def add_face_samples(
+    employee_id: str,
+    files: list[UploadFile] = File(...),
+    _: bool = Depends(require_admin),
+):
+    """Add face samples to an enrolled employee without replacing anything.
+
+    The stored templates are never deleted or rewritten: new embeddings are
+    appended (near-duplicates skipped, capped per person by refusing further
+    additions), so every previously enrolled pose keeps working even when the
+    new pictures are all rejected.
+    """
+    row = store.get_employee(employee_id)
+    if row is None:
+        raise HTTPException(404, "Employee not found.")
+    if not files:
+        raise HTTPException(400, "Provide at least one picture.")
+    frames = []
+    for upload in files:
+        try:
+            frames.append(_decode_image(None, upload))
+        except HTTPException:
+            continue
+    if not frames:
+        raise HTTPException(400, "None of the provided pictures could be read.")
+    label = _allocate_face_label(employee_id)
+    outcome = engine.enroll_more(label, frames)
+    if outcome["added"] == 0:
+        if outcome["no_face"] == len(frames):
+            raise HTTPException(400, "No face detected in the provided pictures.")
+        if outcome["duplicates"]:
+            raise HTTPException(409, "Those pictures duplicate the stored templates — nothing new to add.")
+        raise HTTPException(409, "Template limit reached for this employee.")
+    store.set_face_available(employee_id, 1)
+    return {
+        "detail": f"Added {outcome['added']} sample(s) for {employee_id} ({outcome['total']} stored).",
+        "face_enrolled": True,
+        **outcome,
+    }
+
+
 @app.get("/api/employees/{employee_id}/face")
 def face_status(employee_id: str, _: bool = Depends(require_admin)):
     row = store.get_employee(employee_id)
@@ -394,13 +460,26 @@ def scan_attendance(body: ScanRequest, request: Request):
             headers={"Retry-After": str(retry_after)},
         )
     if engine.name == "opencv":
-        frame = _decode_image(body.image)
-        if frame is None:
+        frames = _decode_frames(body)
+        if not frames:
             raise HTTPException(400, "No image frame provided.")
-        result = engine.recognize(frame, candidates=store.active_face_labels())
-        if result is None:
-            return JSONResponse({"action": "UNKNOWN", "message": "Face not recognised."})
-        emp = store.get_employee_by_face_label(result[0])
+        candidates = store.active_face_labels()
+        outcome = (
+            engine.examine(frames[0], candidates=candidates)
+            if len(frames) == 1
+            else engine.examine_multi(frames, candidates=candidates)
+        )
+        if outcome["status"] == "low_quality":
+            return JSONResponse({"action": "LOW_QUALITY", "message": outcome["reason"]})
+        if outcome["status"] == "ambiguous":
+            return JSONResponse(
+                {"action": "UNKNOWN", "message": "Match too close to call — hold still and try again."}
+            )
+        if outcome["status"] != "match":
+            return JSONResponse(
+                {"action": "UNKNOWN", "message": outcome["reason"] or "Face not recognised."}
+            )
+        emp = store.get_employee_by_face_label(outcome["label"])
         if emp is None:
             return JSONResponse({"action": "UNKNOWN", "message": "Face not recognised."})
         employee_id = emp["id"]
