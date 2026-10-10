@@ -1,0 +1,64 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install backend dependencies
+        run: pip install -r requirements.txt
+
+      # The engine and its tests need the recognition models. Fetch the same
+      # files, from the same URLs and with the same checksums, that the
+      # Dockerfile bakes into the image — so CI and production run identically.
+      - name: Fetch recognition models
+        env:
+          SFACE_URL: https://github.com/opencv/opencv_zoo/raw/main/models/face_recognition_sface/face_recognition_sface_2021dec.onnx
+          SFACE_SHA256: 0ba9fbfa01b5270c96627c4ef784da859931e02f04419c829e83484087c34e79
+          YUNET_URL: https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx
+          YUNET_SHA256: 8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4
+        run: |
+          mkdir -p backend/models
+          curl -fsSL --retry 3 -o backend/models/face_recognition_sface_2021dec.onnx "$SFACE_URL"
+          echo "$SFACE_SHA256  backend/models/face_recognition_sface_2021dec.onnx" | sha256sum -c -
+          curl -fsSL --retry 3 -o backend/models/face_detection_yunet_2023mar.onnx "$YUNET_URL"
+          echo "$YUNET_SHA256  backend/models/face_detection_yunet_2023mar.onnx" | sha256sum -c -
+
+      - name: Run the test suite
+        env:
+          ATTENDANCE_MASTER_KEY: ci-test-key
+          ADMIN_PASSWORD: ci-admin-password
+        run: python -m unittest discover -s tests -v
+
+      - name: Lint backend (errors only)
+        run: |
+          pip install pylint
+          python -m pylint --errors-only backend
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install and build
+        run: |
+          cd frontend
+          npm ci
+          npm run build
