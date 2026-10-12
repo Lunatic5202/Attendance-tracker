@@ -7,6 +7,7 @@ import Employees from './pages/Employees'
 import AttendancePage from './pages/AttendancePage'
 import AdminLogin from './components/AdminLogin'
 import ErrorBoundary from './components/ErrorBoundary'
+import WakeUpGuard from './components/WakeUpGuard'
 import { Toasts, toast } from './components/Toast'
 
 const NAV = [
@@ -53,7 +54,10 @@ export default function App() {
   const [admin, setAdmin] = useState(null)
 
   useEffect(() => {
-    api.health().then((h) => setEngine(h.face_engine)).catch(() => setEngine('offline'))
+    api
+      .health()
+      .then((h) => setEngine(h.face_engine))
+      .catch(() => setEngine('offline'))
   }, [])
 
   const adminRoute = route.startsWith('dashboard') || route.startsWith('employees') || route.startsWith('attendance')
