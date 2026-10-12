@@ -36,6 +36,14 @@ services:
         value: "10"
       - key: SCAN_RATE_WINDOW
         value: "60"
+      - key: LOGIN_RATE_LIMIT
+        value: "5"
+      - key: LOGIN_RATE_WINDOW
+        value: "60"
+      - key: FACE_NEAR_MISS
+        value: "0.5"
+      - key: FACE_MIN_MOTION
+        value: "0.5"
 
       # --- Microsoft 365 / Excel + backup sync (optional) ---
       - key: MS_CLIENT_ID

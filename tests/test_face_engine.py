@@ -215,9 +215,22 @@ class MultiFrameTests(EngineTestBase):
         self.assertEqual(verdict["label"], 1)
 
     def test_all_frames_unusable_reports_quality_first(self):
-        dark = self.np.zeros((160, 160, 3), dtype=self.np.uint8)
-        verdict = self.engine.examine_multi([dark, dark], [1, 2])
+        # Distinct-but-equally-dark frames so the burst is not written off as a
+        # pixel-identical (static) replay before the quality check runs.
+        dark_a = self.np.full((160, 160, 3), 4, dtype=self.np.uint8)
+        dark_b = self.np.full((160, 160, 3), 8, dtype=self.np.uint8)
+        verdict = self.engine.examine_multi([dark_a, dark_b], [1, 2])
         self.assertEqual(verdict["status"], "low_quality")
+
+    def test_identical_burst_is_rejected_as_a_possible_replay(self):
+        verdict = self.engine.examine_multi([self._pattern(1), self._pattern(1)], [1, 2])
+        self.assertEqual(verdict["status"], "suspect")
+        self.assertIn("motion", verdict["reason"].lower())
+
+    def test_motion_threshold_zero_disables_the_replay_check(self):
+        with patch.object(self.engine, "min_motion", 0.0):
+            verdict = self.engine.examine_multi([self._pattern(1), self._pattern(1)], [1, 2])
+        self.assertEqual(verdict["status"], "match")
 
     def test_single_frame_burst_delegates_to_examine(self):
         verdict = self.engine.examine_multi([self._pattern(1)], [1, 2])

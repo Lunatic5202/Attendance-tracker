@@ -203,17 +203,30 @@ Improvements that never touch stored templates:
   of a person's templates, every added sample makes recognition more forgiving.
 * **Quality gates** — scans that are blurry, too dark, too bright, or with the
   face too small are answered with an actionable `LOW_QUALITY` message ("hold
-  still", "move closer") instead of a silent reject.
+  still", "move closer") instead of a silent reject. The **same gates run at
+  enrollment**, so a blurry or badly lit photo is skipped and reported ("2 of 5
+  photos were too blurry") instead of becoming a permanently useless template.
+* **Burst enrollment** — the admin camera captures **3 frames per submit**, so
+  a first enrollment gets lighting and pose coverage right away.
 * **Multi-frame scans** — the kiosk sends a short 3-frame burst per attempt;
   the backend only accepts a label that wins a majority, so one smeared frame
   no longer fails a real person and one lucky frame can no longer clock a
   stranger in.
 * **Ambiguity gate** — when the two best matches are closer together than
   `FACE_MARGIN` (default `0.04`), the scan is rejected rather than guessed.
+* **Near-miss coaching** — a scan that almost matches (within `FACE_NEAR_MISS`
+  of the threshold) tells the employee to ask an admin for more photos — the
+  exact fix for the failure, surfaced at the moment it happens.
+* **Liveness heuristic** — a burst whose frames are pixel-identical (a held-up
+  photo or frozen screen) is rejected with "move slightly and try again". It is
+  a cheap first step, not a security boundary, and is disabled with
+  `FACE_MIN_MOTION=0`.
 * **YuNet detector** — set `FACE_DETECTOR=yunet` to replace the Haar cascade
   with the tiny YuNet DNN, which is markedly better at side angles and partial
   faces. Storage is untouched; validate it on live scans before making it the
   default for a site. The model ships in the Docker image next to SFace.
+* **Sample counts** — the employee list shows how many stored samples each
+  person has, so an admin can tell at a glance who needs another enrollment.
 
 ### Database
 
@@ -238,11 +251,20 @@ Improvements that never touch stored templates:
 face-attendance-tracker/
 │
 ├── backend/
-│   ├── main.py
-│   ├── camera.py
-│   ├── face_recognition.py
-│   ├── attendance.py
-│   └── database.py
+│   ├── main.py            # FastAPI app: admin console, public scan kiosk
+│   ├── face_recognition.py# detector (Haar/YuNet) + SFace embeddings, quality gates, voting
+│   ├── face_store.py      # encrypted template storage (files or Postgres)
+│   ├── attendance.py      # check-in/out, visits, buffers, working hours
+│   ├── store.py           # employee/attendance data access
+│   ├── database.py        # SQLite / PostgreSQL connection layer
+│   ├── security.py        # encryption, sessions, password check
+│   ├── limits.py          # in-process rate limiting
+│   ├── scheduler.py       # once-daily Excel/backup sync
+│   ├── excel_sync.py      # Excel workbook upload (OneDrive for Business)
+│   ├── backup_sync.py     # encrypted database backups
+│   ├── onedrive.py        # Microsoft Graph client
+│   ├── seed_data.py       # boot-time roster + template restore
+│   └── models/            # SFace + YuNet onnx (fetched at build, gitignored)
 │
 ├── frontend/
 │   ├── src/
@@ -252,7 +274,10 @@ face-attendance-tracker/
 ├── data/
 │   └── .gitkeep
 │
+├── .github/workflows/ci.yml   # tests + frontend build on every push
 ├── requirements.txt
+├── Dockerfile
+├── render.yaml
 ├── .gitignore
 └── README.md
 ```
@@ -503,7 +528,13 @@ Push attendance records to a real **Excel** workbook in **OneDrive for Business*
 
 ## 🛡️ Anti-Spoofing
 
-A future version will include **liveness detection** to reduce attempts to authenticate using:
+A first heuristic already ships: a multi-frame burst whose frames are
+pixel-identical — a held-up photo or a frozen screen — is rejected with an
+actionable message (`FACE_MIN_MOTION`, enabled by default). It is deliberately
+conservative and is **not** a security boundary.
+
+A future version will include proper **liveness detection** to further reduce
+attempts to authenticate using:
 
 * 📱 Photos
 * 🖼️ Printed images
@@ -564,17 +595,17 @@ Reject    Recognize
 ### Phase 4 — Security
 
 * [x] Secure biometric storage
-* [x] Admin authentication
+* [x] Admin authentication (rate-limited login)
 * [x] Role-based access (kiosk vs admin console)
-* [ ] Liveness detection
+* [ ] Full liveness detection (a pixel-identical burst is already rejected by a heuristic; challenge/response liveness is future work)
 
 ### Phase 5 — Deployment
 
-* [ ] Kiosk mode
-* [ ] PostgreSQL support
-* [ ] Multi-device support
-* [ ] Cloud deployment
-* [ ] Backup and recovery
+* [x] Kiosk mode (public face-scan kiosk, rate limited)
+* [x] PostgreSQL support (optional backend for ephemeral hosts)
+* [ ] Multi-device support (several kiosks sharing one database)
+* [x] Cloud deployment (Docker image + Render blueprint, auto-deployed)
+* [x] Backup and recovery (encrypted backups to OneDrive for Business)
 
 ---
 

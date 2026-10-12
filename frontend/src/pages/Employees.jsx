@@ -6,19 +6,23 @@ import { toast } from '../components/Toast'
 function EnrollModal({ employee, onClose, onDone }) {
   const first = !employee.face_enrolled
   // Already enrolled -> default to ADDING samples; replacing is opt-in so a
-  // routine update can never wipe the stored templates.
-  const [method, setMethod] = useState('add')
+  // routine update can never wipe the stored templates. Replace means a
+  // deliberate re-enrollment and is only offered as an upload.
+  const [method, setMethod] = useState(first ? 'add' : 'add')
   const [busy, setBusy] = useState(false)
-  const [lastShot, setLastShot] = useState(null)
+  const [burstShots, setBurstShots] = useState([])
   const [mode, setMode] = useState('camera')
   const [picked, setPicked] = useState([])
   const [previews, setPreviews] = useState([])
 
   const adding = !first && method === 'add'
-  const uploadAllowed = first || adding
-  const useUpload = uploadAllowed && mode === 'upload'
+  const replacing = !first && method === 'replace'
+  // Camera/upload choice is only relevant when adding (or first) — replace
+  // always goes through an explicit picture upload.
+  const useUpload = replacing || mode === 'upload'
+  const lastShot = burstShots[burstShots.length - 1] || null
 
-  const capture = useCallback((dataUrl) => setLastShot(dataUrl), [])
+  const captureBurst = useCallback((frames) => setBurstShots(frames), [])
 
   useEffect(
     () => () => previews.forEach((url) => URL.revokeObjectURL(url)),
@@ -26,41 +30,29 @@ function EnrollModal({ employee, onClose, onDone }) {
   )
 
   async function submit() {
-    if (useUpload) {
-      if (!picked.length) return toast('Choose at least one picture first')
-      setBusy(true)
-      try {
-        if (adding) {
-          const res = await api.addFaceSamples(employee.id, picked)
-          toast(`Added ${res.added ?? picked.length} sample(s) for ${employee.name}`, { ok: true })
-        } else {
-          await api.enrollFaces(employee.id, picked)
-          toast(`Enrolled ${picked.length} picture(s) for ${employee.name}`, { ok: true })
-        }
-        onDone()
-        onClose()
-      } catch (e) {
-        toast(e.message || 'Picture upload failed')
-      } finally {
-        setBusy(false)
-      }
-      return
+    const target = useUpload ? picked : burstShots
+    if (!target.length) {
+      return toast(useUpload ? 'Choose at least one picture first' : 'Hold still and capture a few frames first')
     }
-    if (!lastShot) return toast('Hold still and capture a frame first')
     setBusy(true)
     try {
-      if (adding) {
-        const blob = await (await fetch(lastShot)).blob()
-        await api.addFaceSamples(employee.id, [blob])
-        toast(`Sample added for ${employee.name}`, { ok: true })
+      if (replacing) {
+        await api.enrollFaces(employee.id, picked)
+        toast(`Face re-enrolled for ${employee.name}`, { ok: true })
       } else {
-        await api.enrollFace(employee.id, lastShot)
-        toast(`Face enrolled for ${employee.name}`, { ok: true })
+        // Camera frames are data URLs; uploaded files are already blobs. Both
+        // go through the additive path, so nothing already stored is touched.
+        const blobs = await Promise.all(
+          target.map((src) => (src instanceof File ? src : fetch(src).then((r) => r.blob()))),
+        )
+        const res = await api.addFaceSamples(employee.id, blobs)
+        const note = res.rejected ? ` — ${res.rejected} picture(s) rejected` : ''
+        toast(`Stored ${res.added ?? blobs.length} sample(s) for ${employee.name}${note}`, { ok: true })
       }
       onDone()
       onClose()
     } catch (e) {
-      toast(e.message || 'Enrollment failed — no face detected?')
+      toast(e.message || (replacing ? 'Enrollment failed' : 'Adding samples failed — no face detected?'))
     } finally {
       setBusy(false)
     }
@@ -74,23 +66,15 @@ function EnrollModal({ employee, onClose, onDone }) {
     setPreviews(files.map((f) => URL.createObjectURL(f)))
   }
 
-  const submitLabel = busy
-    ? 'Saving…'
-    : useUpload
-      ? adding
-        ? `Add Sample${picked.length ? ` (${picked.length})` : ''}`
-        : `Upload & Enroll${picked.length ? ` (${picked.length})` : ''}`
-      : first
-        ? 'Capture & Enroll Face'
-        : adding
-          ? 'Add This Sample'
-          : 'Capture & Re-Enroll Face'
+  const shotCount = useUpload ? picked.length : burstShots.length
+  const verb = replacing ? 'Replace All' : first ? 'Enroll Face' : 'Add Samples'
+  const submitLabel = busy ? 'Saving…' : `${verb}${shotCount ? ` (${shotCount})` : ''}`
 
   return (
     <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div className="modal">
         <div className="mhead">
-          <h3>{adding ? 'Add Face Samples' : 'Enroll Face'} · {employee.id}</h3>
+          <h3>{adding ? 'Add Face Samples' : replacing ? 'Re-Enroll Face' : 'Enroll Face'} · {employee.id}</h3>
           <button className="x-btn" onClick={onClose}>✕</button>
         </div>
         <div className="mbody">
@@ -106,7 +90,7 @@ function EnrollModal({ employee, onClose, onDone }) {
             </div>
           )}
 
-          {uploadAllowed && (
+          {!replacing && (
             <div className="seg" style={{ marginBottom: '0.9rem' }}>
               <button className={`seg-btn ${mode === 'camera' ? 'on' : ''}`} onClick={() => setMode('camera')}>Use camera</button>
               <button className={`seg-btn ${mode === 'upload' ? 'on' : ''}`} onClick={() => setMode('upload')}>Upload picture(s)</button>
@@ -117,9 +101,9 @@ function EnrollModal({ employee, onClose, onDone }) {
             <>
               <input type="file" multiple accept="image/*" onChange={pick} className="input" style={{ padding: '0.6rem' }} />
               <p className="muted" style={{ fontSize: '0.82rem', marginTop: '0.8rem' }}>
-                {adding
-                  ? 'Pick clear, front-facing pictures. Existing samples are kept — new ones are added alongside them.'
-                  : 'Pick one or more clear, front-facing pictures of the employee. This option is only available for the first enrollment.'}
+                {replacing
+                  ? 'This WIPES the stored templates and enrolls only these pictures. Every existing sample is deleted.'
+                  : 'Pick clear, front-facing pictures. Existing samples are kept — new ones are added alongside them.'}
               </p>
               {previews.length > 0 && (
                 <div className="row" style={{ gap: '0.5rem', flexWrap: 'wrap', marginTop: '0.5rem' }}>
@@ -132,11 +116,11 @@ function EnrollModal({ employee, onClose, onDone }) {
             </>
           ) : (
             <>
-              <CameraCapture active={!busy} onFrame={capture} />
+              <CameraCapture active={!busy} onBurst={captureBurst} burst={3} />
               <p className="muted" style={{ fontSize: '0.82rem', marginTop: '0.8rem' }}>
                 {adding
-                  ? 'Look straight at the camera, then submit. The sample is added without touching the ones already stored.'
-                  : 'Look straight at the camera. The latest captured frame appears below and is enrolled on submit. Only a compact embedding is stored.'}
+                  ? 'Look straight at the camera, then submit. Three frames are captured and added without touching the samples already stored.'
+                  : 'Look straight at the camera, then submit. Three frames are captured and enrolled. Only compact embeddings are stored.'}
               </p>
               {lastShot && <img src={lastShot} alt="face" style={{ width: '100%', maxHeight: 220, objectFit: 'cover', borderRadius: 'var(--radius)', border: '1px solid var(--line)' }} />}
             </>
@@ -144,7 +128,7 @@ function EnrollModal({ employee, onClose, onDone }) {
         </div>
         <div className="mfoot">
           <button className="btn ghost" onClick={onClose}>Cancel</button>
-          <button className="btn" onClick={submit} disabled={busy || (useUpload ? !picked.length : !lastShot)}>
+          <button className="btn" onClick={submit} disabled={busy || (useUpload ? !picked.length : !burstShots.length)}>
             {submitLabel}
           </button>
         </div>
@@ -324,6 +308,11 @@ export default function Employees() {
                   </td>
                   <td>
                     <div className="row" style={{ justifyContent: 'flex-end', gap: '0.4rem' }}>
+                      {e.face_enrolled && (
+                        <span className="badge plain" title="Stored face samples">
+                          {e.face_samples ?? '?'} {e.face_samples === 1 ? 'sample' : 'samples'}
+                        </span>
+                      )}
                       <button className="btn sm ghost" onClick={() => setEnrolling(e)}>
                         {e.face_enrolled ? 'Update Face' : 'Enroll'}
                       </button>

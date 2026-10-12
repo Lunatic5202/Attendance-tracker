@@ -21,13 +21,13 @@ from fastapi import Cookie, Depends, FastAPI, File, HTTPException, Query, Reques
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from backend import attendance, backup_sync, database as db, excel_sync, onedrive, scheduler, security
 from backend import seed_data
 from backend.attendance import AttendanceError
 from backend.face_recognition import engine
-from backend.limits import client_identity, scan_limiter
+from backend.limits import client_identity, login_limiter, scan_limiter
 from backend.store import store
 from backend.security import (
     SESSION_COOKIE,
@@ -102,8 +102,18 @@ class EmployeeUpdate(BaseModel):
 
 class ScanRequest(BaseModel):
     image: str | None = Field(None, max_length=4_000_000)  # base64 frame from the browser camera
-    images: list[str] | None = Field(None, max_length=8)  # short burst; voted server-side
+    images: list[str] | None = Field(None, max_length=6)  # short burst; voted server-side
     employee_id: str | None = None  # explicit id, only honoured by demo engine
+
+    @field_validator("images")
+    @classmethod
+    def _cap_burst_payload(cls, payloads):
+        """Bound the total burst size; this endpoint is public and unauthenticated."""
+        if payloads:
+            total = sum(len(p) for p in payloads)
+            if total > 9_000_000:
+                raise ValueError("Scan burst too large.")
+        return payloads
 
 
 class ManualRequest(BaseModel):
@@ -170,7 +180,12 @@ def _decode_frames(body: ScanRequest) -> list:
 
 
 def _employee_list():
-    return [public_employee(r) for r in store.employees()]
+    listed = []
+    for row in store.employees():
+        employee = public_employee(row)
+        employee["face_samples"] = engine.template_count(row["face_label"]) if employee["face_enrolled"] else 0
+        listed.append(employee)
+    return listed
 
 
 def require_admin(admin_cookie: str | None = Cookie(None, alias=SESSION_COOKIE)):
@@ -194,7 +209,15 @@ def health():
 
 
 @app.post("/api/admin/login")
-def admin_login(body: AdminLogin, response: Response):
+def admin_login(body: AdminLogin, request: Request, response: Response):
+    client = client_identity(request)
+    allowed, retry_after = login_limiter.check(client)
+    if not allowed:
+        raise HTTPException(
+            429,
+            "Too many login attempts. Please wait a moment.",
+            headers={"Retry-After": str(retry_after)},
+        )
     if not os.getenv("ADMIN_PASSWORD"):
         raise HTTPException(
             503,
@@ -280,7 +303,9 @@ def get_employee(employee_id: str, _: bool = Depends(require_admin)):
     row = store.get_employee(employee_id)
     if row is None:
         raise HTTPException(404, "Employee not found.")
-    return public_employee(row)
+    employee = public_employee(row)
+    employee["face_samples"] = engine.template_count(row["face_label"]) if employee["face_enrolled"] else 0
+    return employee
 
 
 @app.patch("/api/employees/{employee_id}")
@@ -380,10 +405,16 @@ async def upload_enrollment_face(
     if not frames:
         raise HTTPException(400, "None of the provided pictures could be read.")
     label = _allocate_face_label(employee_id)
-    if not engine.enroll_many(label, frames):
-        raise HTTPException(400, "No face detected in the provided pictures.")
+    report = engine.enroll_many_report(label, frames)
+    if report["stored"] == 0:
+        raise HTTPException(400, f"No usable face in the provided pictures: {report['reasons'][0]}")
     store.set_face_available(employee_id, 1)
-    return {"detail": f"Enrolled {len(frames)} picture(s) for {employee_id}.", "face_enrolled": True}
+    note = f" {report['rejected']} picture(s) rejected." if report["rejected"] else ""
+    return {
+        "detail": f"Enrolled {report['stored']} picture(s) for {employee_id}.{note}",
+        "face_enrolled": True,
+        **report,
+    }
 
 
 @app.post("/api/employees/{employee_id}/face/add")
@@ -415,14 +446,21 @@ async def add_face_samples(
     label = _allocate_face_label(employee_id)
     outcome = engine.enroll_more(label, frames)
     if outcome["added"] == 0:
+        rejected = outcome.get("rejected", 0)
+        reasons = outcome.get("reasons", [])
         if outcome["no_face"] == len(frames):
             raise HTTPException(400, "No face detected in the provided pictures.")
+        if rejected >= len(frames) and reasons:
+            raise HTTPException(400, f"Pictures were rejected: {reasons[0]}")
         if outcome["duplicates"]:
             raise HTTPException(409, "Those pictures duplicate the stored templates — nothing new to add.")
         raise HTTPException(409, "Template limit reached for this employee.")
     store.set_face_available(employee_id, 1)
+    rejected = outcome.get("rejected", 0)
+    reasons = outcome.get("reasons", [])
+    note = f"{rejected} rejected: {reasons[0]}." if rejected and reasons else ""
     return {
-        "detail": f"Added {outcome['added']} sample(s) for {employee_id} ({outcome['total']} stored).",
+        "detail": f"Added {outcome['added']} sample(s) for {employee_id} ({outcome['total']} stored). {note}".strip(),
         "face_enrolled": True,
         **outcome,
     }
@@ -433,7 +471,11 @@ def face_status(employee_id: str, _: bool = Depends(require_admin)):
     row = store.get_employee(employee_id)
     if row is None:
         raise HTTPException(404, "Employee not found.")
-    return {"employee_id": employee_id, "face_enrolled": bool(row["face_available"])}
+    return {
+        "employee_id": employee_id,
+        "face_enrolled": bool(row["face_available"]),
+        "sample_count": engine.template_count(row["face_label"]) if row["face_available"] else 0,
+    }
 
 
 @app.get("/api/departments")
@@ -476,6 +518,17 @@ def scan_attendance(body: ScanRequest, request: Request):
                 {"action": "UNKNOWN", "message": "Match too close to call — hold still and try again."}
             )
         if outcome["status"] != "match":
+            if (
+                outcome["status"] == "unknown"
+                and outcome["distance"] is not None
+                and engine.threshold < outcome["distance"] <= getattr(engine, "near_miss", 0.5)
+            ):
+                return JSONResponse(
+                    {
+                        "action": "UNKNOWN",
+                        "message": "That didn't quite match — ask an administrator to add more photos.",
+                    }
+                )
             return JSONResponse(
                 {"action": "UNKNOWN", "message": outcome["reason"] or "Face not recognised."}
             )

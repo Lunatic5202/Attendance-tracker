@@ -1,7 +1,7 @@
 """Lightweight in-process fixed-window rate limiting.
 
-Only the public, unauthenticated scan endpoint is rate limited (see
-``scan_attendance`` in ``backend.main``). Admin login is deliberately excluded.
+Only the public, unauthenticated scan endpoint and the admin login route are
+rate limited (see ``scan_attendance`` and ``admin_login`` in ``backend.main``).
 This limiter is per-process; if the app is ever run behind multiple workers put
 a shared store (Redis, Mongo) behind the same ``check``/``retry_after`` API.
 """
@@ -81,4 +81,9 @@ def client_identity(request) -> str:
 scan_limiter = RateLimiter(
     limit=_env_int("SCAN_RATE_LIMIT", 10),
     window_seconds=_env_int("SCAN_RATE_WINDOW", 60),
+)
+
+login_limiter = RateLimiter(
+    limit=_env_int("LOGIN_RATE_LIMIT", 5),
+    window_seconds=_env_int("LOGIN_RATE_WINDOW", 60),
 )

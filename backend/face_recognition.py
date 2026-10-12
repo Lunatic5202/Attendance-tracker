@@ -112,6 +112,7 @@ class DemoFaceEngine:
 
     name = "demo"
     detector_name = None
+    near_miss = 0.5
 
     def enroll(self, label: int, image=None) -> bool:
         FACES_DIR.mkdir(parents=True, exist_ok=True)
@@ -123,9 +124,16 @@ class DemoFaceEngine:
     def enroll_many(self, label: int, images=None) -> bool:
         return True
 
+    def enroll_many_report(self, label: int, images=None) -> dict:
+        count = len(images or [])
+        return {"stored": count, "rejected": 0, "reasons": [], "total": count}
+
     def enroll_more(self, label: int, images=None) -> dict:
         count = len(images or [])
-        return {"added": count, "duplicates": 0, "no_face": 0, "over_capacity": 0, "total": count}
+        return {"added": count, "duplicates": 0, "no_face": 0, "over_capacity": 0, "rejected": 0, "reasons": [], "total": count}
+
+    def template_count(self, label: int) -> int:
+        return 0
 
     def recognize(self, image, candidates: list[int] | None = None) -> tuple[int, float] | None:
         if not candidates:
@@ -182,9 +190,14 @@ class OpenCVFaceEngine:
         self._clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
         self.threshold = float(os.getenv("FACE_THRESHOLD", DEFAULT_FACE_THRESHOLD))
         self.margin = float(os.getenv("FACE_MARGIN", DEFAULT_FACE_MARGIN))
+        self.near_miss = float(os.getenv("FACE_NEAR_MISS", "0.5"))
         self.min_sharpness = float(os.getenv("FACE_MIN_SHARPNESS", "30"))
         self.brightness_min = float(os.getenv("FACE_BRIGHTNESS_MIN", "40"))
         self.brightness_max = float(os.getenv("FACE_BRIGHTNESS_MAX", "220"))
+        #: Minimum mean per-pixel difference between consecutive burst frames
+        #: before a burst is accepted. A held-up photo or frozen screen is
+        #: pixel-identical across frames, so this is a cheap liveness heuristic.
+        self.min_motion = float(os.getenv("FACE_MIN_MOTION", "0.5"))
         self._gallery = None
         self._gallery_sig = None
         self._skipped_legacy = 0
@@ -366,24 +379,52 @@ class OpenCVFaceEngine:
         return self.enroll_many(label, [image])
 
     def enroll_many(self, label: int, images) -> bool:
-        """Replace the templates for ``label`` with one per supplied image.
+        """Replace the templates for ``label`` with one per usable image.
 
         Multiple poses/pictures improve recognition, since a match is the best
-        (lowest) distance across the stored embeddings. Returns ``True`` if at
-        least one image contained a usable face.
+        (lowest) distance across the stored embeddings. Images that fail the
+        same quality gates used at scan time are skipped rather than stored as
+        unusable templates. Returns ``True`` when at least one image produced a
+        usable template.
         """
-        stored = []
+        return self.enroll_many_report(label, images)["stored"] > 0
+
+    def enroll_many_report(self, label: int, images) -> dict:
+        """Like ``enroll_many`` but reports the per-image outcome.
+
+        Returns ``{"stored": n, "rejected": n, "reasons": [...], "total": n}``
+        so the admin UI can say "2 of 5 photos were too blurry" instead of
+        succeeding or failing with no explanation.
+        """
+        stored, reasons = [], []
         for image in images:
             crop = self._largest(image)
             if crop is None:
+                reasons.append("No face detected.")
+                continue
+            reason = self._quality(image, crop)
+            if reason:
+                reasons.append(reason)
                 continue
             vector = self._embed(image, crop)
-            if vector is not None:
-                stored.append(encrypt_bytes(vector.tobytes()))
-        if not stored:
-            return False
-        self.store.save(label, stored)
-        return True
+            if vector is None:
+                reasons.append("No face detected.")
+                continue
+            stored.append(encrypt_bytes(vector.tobytes()))
+        if stored:
+            self.store.save(label, stored)
+        return {"stored": len(stored), "rejected": len(reasons), "reasons": reasons, "total": len(stored)}
+
+    def template_count(self, label: int) -> int:
+        """Number of usable stored templates for ``label``.
+
+        Reads the cached gallery so admin listings pay no extra scan over the
+        template store.
+        """
+        gallery = self._get_gallery()
+        if not gallery or label not in gallery:
+            return 0
+        return len(gallery[label])
 
     def has(self, label: int) -> bool:
         """Whether ``label`` has a template SFace can actually use.
@@ -407,16 +448,24 @@ class OpenCVFaceEngine:
         """Add templates for ``label`` without touching the stored ones.
 
         Existing embeddings are kept byte-for-byte; new samples are skipped
-        when they duplicate a stored pose or would push the person past the
-        per-person cap (which refuses additions rather than evicting).
+        when they fail the quality gates, duplicate a stored pose, or would
+        push the person past the per-person cap (which refuses additions
+        rather than evicting).
         """
         gallery = self._get_gallery() or {}
         seen = list(gallery.get(label, []))
         existing = len(seen)
-        blobs, duplicates, no_face = [], 0, 0
+        blobs, duplicates, no_face, reasons = [], 0, 0, []
         for image in images:
             crop = self._largest(image)
-            vector = None if crop is None else self._embed(image, crop)
+            if crop is None:
+                no_face += 1
+                continue
+            reason = self._quality(image, crop)
+            if reason:
+                reasons.append(reason)
+                continue
+            vector = self._embed(image, crop)
             if vector is None:
                 no_face += 1
                 continue
@@ -434,6 +483,8 @@ class OpenCVFaceEngine:
             "added": len(blobs),
             "duplicates": duplicates,
             "no_face": no_face,
+            "rejected": len(reasons),
+            "reasons": reasons,
             "over_capacity": over_capacity,
             "total": existing + len(blobs),
         }
@@ -491,6 +542,32 @@ class OpenCVFaceEngine:
         )
         return {"status": status, "label": best_label, "distance": best, "second": second, "reason": None}
 
+    def _static_frames(self, frames) -> bool:
+        """True when consecutive burst frames are near-identical images.
+
+        A held-up photo or a frozen screen produces pixel-identical frames,
+        unlike a live person (who moves, however slightly). This is a cheap
+        liveness heuristic — not a security boundary — and the threshold is
+        set conservatively so a perfectly still subject is not rejected.
+        """
+        threshold = self.min_motion
+        if threshold <= 0 or len(frames) < 2:
+            return False
+        previous = None
+        for frame in frames:
+            gray = self._gray(frame)
+            small = self.cv2.resize(gray, (96, 96))
+            if previous is not None:
+                diff = float(
+                    np.abs(
+                        np.asarray(small, dtype=np.int16) - np.asarray(previous, dtype=np.int16)
+                    ).mean()
+                )
+                if diff >= threshold:
+                    return False
+            previous = small
+        return True
+
     def examine_multi(self, frames, candidates: list[int] | None = None) -> dict:
         """Vote across a short burst of frames of the same person.
 
@@ -498,13 +575,22 @@ class OpenCVFaceEngine:
         own, and a label must win a strict majority of the usable frames. One
         smeared frame no longer fails the whole scan, while one lucky frame is
         no longer enough to clock a stranger in. A lone usable frame keeps the
-        old single-frame power, so nothing gets stricter by accident.
+        old single-frame power, so nothing gets stricter by accident. Bursts
+        whose frames are pixel-identical are rejected as a possible photo
+        replay (see ``_static_frames``).
         """
         verdict = {"label": None, "distance": None, "second": None, "reason": None}
         if not frames:
             return {**verdict, "status": "no_face", "reason": "No face detected."}
         if len(frames) == 1:
             return self.examine(frames[0], candidates)
+        if self._static_frames(frames):
+            log.info("multi-frame decision: burst frames are static; suspecting a photo replay")
+            return {
+                **verdict,
+                "status": "suspect",
+                "reason": "Motion wasn't detected — please move slightly and try again.",
+            }
         results = [self.examine(frame, candidates) for frame in frames]
         usable = [r for r in results if r["status"] in ("match", "unknown")]
         votes: dict[int, list[float]] = {}
