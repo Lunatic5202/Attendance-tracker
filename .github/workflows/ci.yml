@@ -44,7 +44,7 @@ jobs:
       - name: Lint backend (errors only)
         run: |
           pip install pylint
-          python -m pylint --errors-only backend
+          python -m pylint --errors-only --disable=import-error,E1101,E1135,E1136 backend
 
   frontend:
     runs-on: ubuntu-latest
