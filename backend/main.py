@@ -407,7 +407,10 @@ async def upload_enrollment_face(
     label = _allocate_face_label(employee_id)
     report = engine.enroll_many_report(label, frames)
     if report["stored"] == 0:
-        raise HTTPException(400, f"No usable face in the provided pictures: {report['reasons'][0]}")
+        if report.get("over_capacity"):
+            raise HTTPException(409, "Template limit reached for this employee.")
+        reason = report["reasons"][0] if report.get("reasons") else "No usable face was found."
+        raise HTTPException(400, f"No usable face in the provided pictures: {reason}")
     store.set_face_available(employee_id, 1)
     note = f" {report['rejected']} picture(s) rejected." if report["rejected"] else ""
     return {

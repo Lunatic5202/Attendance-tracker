@@ -46,8 +46,7 @@ function EnrollModal({ employee, onClose, onDone }) {
           target.map((src) => (src instanceof File ? src : fetch(src).then((r) => r.blob()))),
         )
         const res = await api.addFaceSamples(employee.id, blobs)
-        const note = res.rejected ? ` — ${res.rejected} picture(s) rejected` : ''
-        toast(`Stored ${res.added ?? blobs.length} sample(s) for ${employee.name}${note}`, { ok: true })
+        toast(res.detail || `Stored ${res.added ?? blobs.length} sample(s) for ${employee.name}`, { ok: true })
       }
       onDone()
       onClose()

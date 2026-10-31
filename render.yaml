@@ -30,6 +30,12 @@ services:
         value: "8"        # one check-in at a time, so two people cannot be recorded back to back
       - key: FACE_DETECTOR
         value: "yunet"      # use the DNN detector baked into the Docker image
+      - key: FACE_MAX_TEMPLATES
+        value: "15"         # additive enrollment cap; never evicts existing samples
+      - key: FACE_YUNET_SCORE
+        value: "0.45"       # improve detection recall in varied kiosk conditions
+      - key: FACE_YUNET_FALLBACK_SCALE
+        value: "1.5"        # retry misses at higher scale for smaller/farther faces
       - key: FACE_THRESHOLD
         value: "0.363"    # SFace cosine distance; lower = stricter
       - key: ADMIN_SESSION_TTL
