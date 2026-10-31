@@ -21,7 +21,13 @@ const CAMERA_ERROR_MESSAGES = {
   CameraTrackEnded: 'The camera stream stopped. Try starting it again.',
 }
 
-function cameraError(name) {\n  const error = new Error(name)\n  error.name = name\n  return error\n}\n\nfunction waitForVideoFrame(video, isCancelled) {
+function cameraError(name) {
+  const error = new Error(name)
+  error.name = name
+  return error
+}
+
+function waitForVideoFrame(video, isCancelled) {
   if (video.readyState >= 2 && video.videoWidth > 0) return Promise.resolve()
 
   return new Promise((resolve, reject) => {
