@@ -253,9 +253,26 @@ class MultiFrameTests(EngineTestBase):
 
 
 class DetectorSelectionTests(EngineTestBase):
-    def test_default_detector_is_haar(self):
-        self.assertEqual(self.engine.detector_name, "haar")
-        self.assertIsNone(self.engine._yunet)
+    def test_default_detector_prefers_yunet_when_model_is_available(self):
+        if YUNET_MODEL.exists():
+            self.assertEqual(self.engine.detector_name, "yunet")
+            self.assertIsNotNone(self.engine._yunet)
+        else:
+            self.assertEqual(self.engine.detector_name, "haar")
+            self.assertIsNone(self.engine._yunet)
+
+    def test_engine_startup_preserves_existing_face_files_and_templates(self):
+        photo_path = os.path.join(self.faces_dir, "7.jpg")
+        with open(photo_path, "wb") as photo:
+            photo.write(b"existing-face-file")
+        existing_template = encrypt_bytes(b"existing-template-bytes")
+        self.engine.store.save(7, [existing_template])
+
+        restarted = self._engine()
+
+        self.assertTrue(os.path.isfile(photo_path))
+        stored = [blob for label, blob in restarted.store.iter_templates() if label == 7]
+        self.assertEqual(stored, [existing_template])
 
     def test_yunet_request_falls_back_to_haar_when_the_model_is_absent(self):
         with patch.dict(os.environ, {"FACE_DETECTOR": "yunet"}), patch(
