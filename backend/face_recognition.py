@@ -389,9 +389,8 @@ class OpenCVFaceEngine:
     def enroll_many_report(self, label: int, images) -> dict:
         """Like ``enroll_many`` but reports the per-image outcome.
 
-        Returns ``{"stored": n, "rejected": n, "reasons": [...], "total": n}``
-        so the admin UI can say "2 of 5 photos were too blurry" instead of
-        succeeding or failing with no explanation.
+        Returns stored/rejected counts, rejection reasons and the number of
+        pictures skipped because the per-employee template cap was reached.
         """
         stored, reasons, over_capacity = [], [], 0
         capacity = max(0, MAX_TEMPLATES - self.template_count(label))
