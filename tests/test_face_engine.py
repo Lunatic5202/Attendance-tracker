@@ -48,6 +48,16 @@ class EngineTestBase(unittest.TestCase):
 
 
 class AdditiveEnrollmentTests(EngineTestBase):
+    def test_enroll_many_keeps_existing_templates(self):
+        self.engine.enroll_many(11, [self._pattern(11)])
+        original = list(self._templates(11))
+
+        self.engine.enroll_many(11, [self._pattern(12)])
+
+        for blob in original:
+            self.assertIn(blob, self._templates(11))
+        self.assertEqual(len(self._templates(11)), 2)
+
     def test_adding_a_sample_keeps_the_original_template(self):
         self.engine.enroll_many(1, [self._pattern(1)])
         original = list(self._templates(1))
