@@ -393,8 +393,12 @@ class OpenCVFaceEngine:
         so the admin UI can say "2 of 5 photos were too blurry" instead of
         succeeding or failing with no explanation.
         """
-        stored, reasons = [], []
+        stored, reasons, over_capacity = [], [], 0
+        capacity = max(0, MAX_TEMPLATES - self.template_count(label))
         for image in images:
+            if len(stored) >= capacity:
+                over_capacity += 1
+                continue
             crop = self._largest(image)
             if crop is None:
                 reasons.append("No face detected.")
@@ -411,7 +415,13 @@ class OpenCVFaceEngine:
         if stored:
             # Enrollment is additive and preserves existing templates.
             self.store.append(label, stored)
-        return {"stored": len(stored), "rejected": len(reasons), "reasons": reasons, "total": len(stored)}
+        return {
+            "stored": len(stored),
+            "rejected": len(reasons),
+            "reasons": reasons,
+            "over_capacity": over_capacity,
+            "total": self.template_count(label),
+        }
 
     def template_count(self, label: int) -> int:
         """Number of usable stored templates for ``label``.
