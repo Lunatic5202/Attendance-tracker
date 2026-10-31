@@ -302,10 +302,10 @@ class DetectorSelectionTests(EngineTestBase):
                 self.calls += 1
                 if self.calls == 1:
                     return None, None
-                row = self_row = self.engine_np.zeros((1, 15), dtype=self.engine_np.float32)
+                row = self.engine_np.zeros((1, 15), dtype=self.engine_np.float32)
                 row[0, :4] = [30, 45, 60, 75]
                 row[0, 14] = 0.9
-                return None, self_row
+                return None, row
 
         fake = FakeYuNet()
         fake.engine_np = self.np
