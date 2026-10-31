@@ -29,7 +29,7 @@ from pathlib import Path
 
 import numpy as np
 
-from backend.face_store import FileFaceStore, build_store
+from backend.face_store import build_store
 from backend.security import decrypt_bytes, encrypt_bytes
 
 log = logging.getLogger("face")
@@ -182,7 +182,7 @@ class OpenCVFaceEngine:
         # so a kiosk never boots with no detector at all.
         self.detector_name = "haar"
         self._yunet = None
-        if os.getenv("FACE_DETECTOR", "haar").strip().lower() == "yunet":
+        if os.getenv("FACE_DETECTOR", "yunet").strip().lower() == "yunet":
             self._yunet = self._load_yunet()
             if self._yunet is not None:
                 self.detector_name = "yunet"
@@ -202,7 +202,6 @@ class OpenCVFaceEngine:
         self._gallery_sig = None
         self._skipped_legacy = 0
         self.store = build_store(FACES_DIR)
-        self._migrate_legacy_faces()
 
     def _load_yunet(self):
         """Build the YuNet DNN detector, or return None to stay on Haar."""
@@ -225,23 +224,6 @@ class OpenCVFaceEngine:
         except Exception as exc:
             log.warning("YuNet failed to load (%s); staying on Haar.", exc)
             return None
-
-    def _migrate_legacy_faces(self) -> None:
-        """Remove plaintext face crops left behind by pre-encryption builds.
-
-        Older versions stored plain ``<label>.jpg`` crops. They are deleted
-        rather than converted: SFace needs a photo to embed, and keeping a
-        stale crop would only leave unusable templates behind.
-        """
-        if not isinstance(self.store, FileFaceStore):
-            return
-        for path in sorted(FACES_DIR.glob("*.jpg")):
-            try:
-                label = int(path.stem.split(".")[0])
-            except ValueError:
-                continue
-            self.store.clear(label)
-            path.unlink(missing_ok=True)
 
     # ---- helpers ---------------------------------------------------------
     def _gray(self, image):
@@ -379,7 +361,7 @@ class OpenCVFaceEngine:
         return self.enroll_many(label, [image])
 
     def enroll_many(self, label: int, images) -> bool:
-        """Replace the templates for ``label`` with one per usable image.
+        """Add templates for ``label`` without replacing existing samples.
 
         Multiple poses/pictures improve recognition, since a match is the best
         (lowest) distance across the stored embeddings. Images that fail the
@@ -412,7 +394,8 @@ class OpenCVFaceEngine:
                 continue
             stored.append(encrypt_bytes(vector.tobytes()))
         if stored:
-            self.store.save(label, stored)
+            # Enrollment is additive and preserves existing templates.
+            self.store.append(label, stored)
         return {"stored": len(stored), "rejected": len(reasons), "reasons": reasons, "total": len(stored)}
 
     def template_count(self, label: int) -> int:

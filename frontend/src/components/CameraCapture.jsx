@@ -74,7 +74,7 @@ export default function CameraCapture({
           if (frame) frames.push(frame)
           taken += 1
           if (taken < burst) {
-            setTimeout(collect, 250)
+            setTimeout(collect, 140)
           } else if (frames.length) {
             onBurst(frames)
           }
@@ -84,7 +84,7 @@ export default function CameraCapture({
         const frame = grab()
         if (frame && onFrame) onFrame(frame)
       }
-    }, 2600)
+    }, 1500)
     return () => clearInterval(timer)
   }, [ready, onFrame, onBurst, burst])
 
