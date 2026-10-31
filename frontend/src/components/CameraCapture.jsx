@@ -9,6 +9,53 @@ export function captureDataURL(video) {
   return canvas.toDataURL('image/jpeg', 0.9)
 }
 
+const CAMERA_ERROR_MESSAGES = {
+  AbortError: 'Camera startup was interrupted. Try starting it again.',
+  NotAllowedError: 'Camera permission was denied. Allow camera access in your browser.',
+  NotFoundError: 'No camera was found on this device.',
+  NotReadableError: 'The camera is already in use or could not be accessed.',
+  OverconstrainedError: 'The camera cannot satisfy the requested video settings.',
+  SecurityError: 'Camera access is blocked. Open this site over HTTPS.',
+  VideoPlaybackError: 'The camera connected, but the video feed did not start.',
+  CameraApiUnavailable: 'This browser does not provide camera access. Use a supported browser over HTTPS.',
+  CameraTrackEnded: 'The camera stream stopped. Try starting it again.',
+}
+
+function cameraError(name) {
+  const error = new Error(name)
+  error.name = name
+  return error
+}
+
+function waitForVideoFrame(video, isCancelled) {
+  if (video.readyState >= 2 && video.videoWidth > 0) return Promise.resolve()
+
+  return new Promise((resolve, reject) => {
+    let settled = false
+    const finish = (error) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timeout)
+      video.removeEventListener('loadeddata', checkReady)
+      video.removeEventListener('playing', checkReady)
+      video.removeEventListener('error', onError)
+      if (error) reject(error)
+      else resolve()
+    }
+    const checkReady = () => {
+      if (isCancelled()) return finish(new DOMException('Camera startup cancelled', 'AbortError'))
+      if (video.readyState >= 2 && video.videoWidth > 0) finish()
+    }
+    const onError = () => finish(cameraError('VideoPlaybackError'))
+    const timeout = setTimeout(() => finish(new Error('VideoPlaybackError')), 10000)
+
+    video.addEventListener('loadeddata', checkReady)
+    video.addEventListener('playing', checkReady)
+    video.addEventListener('error', onError)
+    checkReady()
+  })
+}
+
 export default function CameraCapture({
   active = true,
   onFrame,
@@ -23,38 +70,106 @@ export default function CameraCapture({
   const videoRef = useRef(null)
   const [error, setError] = useState(null)
   const [ready, setReady] = useState(false)
+  const [retryKey, setRetryKey] = useState(0)
 
   useEffect(() => {
-    if (!active) return
+    if (!active) {
+      setReady(false)
+      return undefined
+    }
+
     let stream = null
     let cancelled = false
-    navigator.mediaDevices
-      .getUserMedia({ video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' }, audio: false })
-      .then((s) => {
+    let videoTrack = null
+    let handleTrackEnded = null
+    const video = videoRef.current
+
+    setReady(false)
+    setError(null)
+    if (onError) onError(null)
+
+    const startCamera = async () => {
+      try {
+        if (!navigator.mediaDevices?.getUserMedia) {
+          const unavailable = new Error('CameraApiUnavailable')
+          unavailable.name = 'CameraApiUnavailable'
+          throw unavailable
+        }
+
+        const cameraStream = await navigator.mediaDevices.getUserMedia({
+          video: {
+            width: { ideal: 640 },
+            height: { ideal: 480 },
+            facingMode: 'user',
+          },
+          audio: false,
+        })
+
         if (cancelled) {
-          s.getTracks().forEach((t) => t.stop())
+          cameraStream.getTracks().forEach((track) => track.stop())
           return
         }
-        stream = s
-        if (videoRef.current) {
-          videoRef.current.srcObject = s
-          videoRef.current.play().catch(() => {})
+
+        stream = cameraStream
+        videoTrack = cameraStream.getVideoTracks()[0]
+        if (videoTrack) {
+          handleTrackEnded = () => {
+            if (cancelled) return
+            setReady(false)
+            setError('CameraTrackEnded')
+            if (onError) onError('CameraTrackEnded')
+          }
+          videoTrack.addEventListener('ended', handleTrackEnded)
         }
-        setReady(true)
+
+        if (!video) throw new Error('VideoPlaybackError')
+
+        video.muted = true
+        video.playsInline = true
+        video.srcObject = cameraStream
+
+        // Do not report LIVE until the browser confirms playback and a real
+        // frame is available. An interrupted play() is surfaced to the user.
+        await video.play()
+        await waitForVideoFrame(video, () => cancelled)
+
+        if (cancelled) return
         setError(null)
-      })
-      .catch((e) => {
-        setError(e.name || 'camera_unavailable')
-        if (onError) onError(e.name || 'camera_unavailable')
-      })
+        setReady(true)
+        if (onError) onError(null)
+      } catch (cause) {
+        if (cancelled) return
+        const errorName = cause?.name || cause?.message || 'CameraUnavailable'
+        setReady(false)
+        setError(errorName)
+        if (onError) onError(errorName)
+        if (stream) {
+          stream.getTracks().forEach((track) => track.stop())
+          stream = null
+        }
+        if (video && video.srcObject) {
+          video.pause()
+          video.srcObject = null
+        }
+      }
+    }
+
+    startCamera()
 
     return () => {
       cancelled = true
+      if (videoTrack && handleTrackEnded) {
+        videoTrack.removeEventListener('ended', handleTrackEnded)
+      }
       if (stream) {
-        stream.getTracks().forEach((t) => t.stop())
+        stream.getTracks().forEach((track) => track.stop())
+      }
+      if (video && video.srcObject === stream) {
+        video.pause()
+        video.srcObject = null
       }
     }
-  }, [active, onError])
+  }, [active, onError, retryKey])
 
   useEffect(() => {
     if (!ready || (!onFrame && !onBurst) || !videoRef.current) return
@@ -125,6 +240,13 @@ export default function CameraCapture({
     }
   }, [watch, ready, motionThreshold, onMotion])
 
+  const retryCamera = () => {
+    setError(null)
+    setReady(false)
+    if (onError) onError(null)
+    setRetryKey((key) => key + 1)
+  }
+
   return (
     <div className="camera">
       <span className="cam-kicker">CAM 01 / {ready ? 'LIVE' : 'OFFLINE'}</span>
@@ -141,11 +263,12 @@ export default function CameraCapture({
         <div className="camera-off">
           {error ? (
             <>
-              <div>Camera unavailable — {error}</div>
-              <div>use the simulate controls below</div>
+              <div>Camera unavailable — {CAMERA_ERROR_MESSAGES[error] || error}</div>
+              <button type="button" onClick={retryCamera}>Retry camera</button>
+              <div>Or use the simulate controls below.</div>
             </>
           ) : (
-            <div>starting camera…</div>
+            <div>Starting camera…</div>
           )}
         </div>
       )}
