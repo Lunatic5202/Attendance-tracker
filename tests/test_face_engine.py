@@ -103,6 +103,16 @@ class AdditiveEnrollmentTests(EngineTestBase):
     def test_default_template_cap_is_fifteen(self):
         self.assertEqual(MAX_TEMPLATES, 15)
 
+    def test_first_enrollment_batch_is_also_limited_without_replacing_data(self):
+        images = [self._pattern(seed) for seed in range(100, 100 + MAX_TEMPLATES + 3)]
+
+        outcome = self.engine.enroll_many_report(8, images)
+
+        self.assertEqual(outcome["stored"], MAX_TEMPLATES)
+        self.assertEqual(outcome["over_capacity"], 3)
+        self.assertEqual(outcome["total"], MAX_TEMPLATES)
+        self.assertEqual(len(self._templates(8)), MAX_TEMPLATES)
+
     def test_cap_refuses_additions_instead_of_evicting(self):
         self.engine.enroll_many(1, [self._pattern(1)])
         original = list(self._templates(1))
