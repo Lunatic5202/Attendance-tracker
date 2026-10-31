@@ -100,8 +100,12 @@ class AdditiveEnrollmentTests(EngineTestBase):
         self.assertEqual(outcome["added"], 1)
         self.assertEqual(outcome["duplicates"], 1)
 
+    def test_default_template_cap_is_fifteen(self):
+        self.assertEqual(MAX_TEMPLATES, 15)
+
     def test_cap_refuses_additions_instead_of_evicting(self):
         self.engine.enroll_many(1, [self._pattern(1)])
+        original = list(self._templates(1))
         extra = [self._pattern(seed) for seed in range(10, 10 + MAX_TEMPLATES + 2)]
 
         outcome = self.engine.enroll_more(1, extra)
@@ -109,6 +113,8 @@ class AdditiveEnrollmentTests(EngineTestBase):
         self.assertEqual(outcome["total"], MAX_TEMPLATES)
         self.assertEqual(len(self._templates(1)), MAX_TEMPLATES)
         self.assertGreater(outcome["over_capacity"], 0)
+        for blob in original:
+            self.assertIn(blob, self._templates(1), "capacity must never evict old templates")
 
     def test_legacy_lbph_template_survives_an_additive_enrollment(self):
         from backend.security import decrypt_bytes
@@ -273,6 +279,32 @@ class DetectorSelectionTests(EngineTestBase):
         self.assertTrue(os.path.isfile(photo_path))
         stored = [blob for label, blob in restarted.store.iter_templates() if label == 7]
         self.assertEqual(stored, [existing_template])
+
+    def test_yunet_retries_missed_faces_on_an_enlarged_frame(self):
+        class FakeYuNet:
+            def __init__(self):
+                self.calls = 0
+
+            def setInputSize(self, size):
+                self.input_size = size
+
+            def detect(self, frame):
+                self.calls += 1
+                if self.calls == 1:
+                    return None, None
+                row = self_row = self.engine_np.zeros((1, 15), dtype=self.engine_np.float32)
+                row[0, :4] = [30, 45, 60, 75]
+                row[0, 14] = 0.9
+                return None, self_row
+
+        fake = FakeYuNet()
+        fake.engine_np = self.np
+        self.engine._yunet = fake
+        with patch.dict(os.environ, {"FACE_YUNET_FALLBACK_SCALE": "1.5"}):
+            boxes = self.engine._detect_yunet(self._pattern(81))
+
+        self.assertEqual(fake.calls, 2)
+        self.assertEqual(boxes.tolist(), [[20, 30, 40, 50]])
 
     def test_yunet_request_falls_back_to_haar_when_the_model_is_absent(self):
         with patch.dict(os.environ, {"FACE_DETECTOR": "yunet"}), patch(
