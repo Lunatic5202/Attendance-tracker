@@ -1,7 +1,6 @@
 """Face detection, enrollment and recognition.
 
-Primary stack: a face **detector** (Haar cascade by default, YuNet DNN when
-``FACE_DETECTOR=yunet``) + **SFace** (recognition), a deep 128-dimensional
+Primary stack: a YuNet DNN face **detector** (with Haar fallback) + **SFace** (recognition), a deep 128-dimensional
 face embedding model from the OpenCV model zoo. SFace is substantially more
 accurate than the LBPH histogram model it replaces, which matters at a kiosk
 where a false reject means a real person cannot clock in.
@@ -60,7 +59,7 @@ DEFAULT_FACE_THRESHOLD = 0.363
 DEFAULT_FACE_MARGIN = 0.04
 #: Upper bound on stored templates per person; additive enrollment refuses
 #: to grow past this instead of evicting (deleting) anything.
-MAX_TEMPLATES = int(os.getenv("FACE_MAX_TEMPLATES", "5"))
+MAX_TEMPLATES = int(os.getenv("FACE_MAX_TEMPLATES", "15"))
 #: New embeddings this close to an existing one are the same pose; storing
 #: them would only waste gallery time, so they are skipped, not replaced.
 DEDUPE_DISTANCE = float(os.getenv("FACE_DEDUPE_DISTANCE", "0.08"))
@@ -217,7 +216,7 @@ class OpenCVFaceEngine:
                 str(YUNET_MODEL),
                 "",
                 (320, 320),
-                score_threshold=float(os.getenv("FACE_YUNET_SCORE", "0.6")),
+                score_threshold=float(os.getenv("FACE_YUNET_SCORE", "0.45")),
                 nms_threshold=0.3,
                 top_k=5000,
             )
@@ -241,15 +240,31 @@ class OpenCVFaceEngine:
         return faces
 
     def _detect_yunet(self, image):
-        """Return ``(x, y, w, h)`` boxes ordered by detection confidence."""
-        height, width = image.shape[:2]
-        self._yunet.setInputSize((width, height))
+        """Return face boxes, retrying a miss on an enlarged frame for small faces."""
         frame = image if len(image.shape) == 3 else self.cv2.cvtColor(image, self.cv2.COLOR_GRAY2BGR)
-        result = self._yunet.detect(frame)
-        faces = result[1] if isinstance(result, tuple) else result
-        if faces is None or len(faces) == 0:
+
+        def run_detector(buffer):
+            height, width = buffer.shape[:2]
+            self._yunet.setInputSize((width, height))
+            result = self._yunet.detect(buffer)
+            detected = result[1] if isinstance(result, tuple) else result
+            return None if detected is None or len(detected) == 0 else np.asarray(detected)
+
+        faces = run_detector(frame)
+        scale = float(os.getenv("FACE_YUNET_FALLBACK_SCALE", "1.5"))
+        if faces is None and scale > 1.0:
+            # A second pass costs time only on a miss and can recover smaller,
+            # farther-away faces. Coordinates are mapped back to the source frame.
+            enlarged = self.cv2.resize(
+                frame, None, fx=scale, fy=scale, interpolation=self.cv2.INTER_CUBIC
+            )
+            faces = run_detector(enlarged)
+            if faces is not None:
+                faces = faces.copy()
+                faces[:, :4] /= scale
+
+        if faces is None:
             return np.empty((0, 4), dtype=np.int32)
-        faces = np.asarray(faces)
         if faces.shape[1] >= 15:
             faces = faces[np.argsort(-faces[:, 14])]  # confidence column
         return np.round(faces[:, :4]).astype(np.int32)
