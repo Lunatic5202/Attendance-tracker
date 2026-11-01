@@ -661,3 +661,14 @@ Built with ❤️ using Python, OpenCV, and modern web technologies.
 ---
 
 ⭐ If you find this project useful, consider giving the repository a star!
+
+
+## Deployment and data-preservation notes
+
+The repository includes a Docker deployment definition and a Render blueprint. Production configuration expects PostgreSQL through `DATABASE_URL`; it also requires an administrator password, an encryption master key and the appropriate allowed-origin configuration. Optional Microsoft 365/OneDrive sync variables are documented in `render.yaml`.
+
+**Protect existing attendance data:** deploy code and schema changes without deleting or recreating the production database or its face-enrollment records. Back up PostgreSQL before migrations or maintenance. Keep the existing `ATTENDANCE_MASTER_KEY` stable: encrypted employee records and face templates may become unreadable if the key changes. Never commit database exports, employee images, face templates, passwords or keys.
+
+The repository's Render blueprint configures YuNet detection and SFace recognition. Enrollment is intended to be additive: adding samples should not evict existing samples. Confirm the live environment's `FACE_MAX_TEMPLATES`, detector and threshold settings before changing them; local defaults and deployment values may differ.
+
+For deployment checks, verify `/api/health`, camera permissions/origin, administrator login, employee enrollment, check-in/check-out and field-visit flows. A successful health response alone does not prove browser camera capture or recognition works on every kiosk.
