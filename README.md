@@ -644,11 +644,9 @@ git push origin feature/your-feature
 
 ---
 
-## License
+## License and ownership
 
-This project is licensed under the **MIT License**.
-
-See [`LICENSE`](LICENSE) for more information.
+No project-wide license is currently provided. Do not assume permission to copy, modify, or redistribute this repository. The attendance system processes employee and biometric data; deployment and reuse require authorization from the relevant organization and compliance with its privacy and retention requirements. Third-party dependencies remain under their own licenses.
 
 ---
 
