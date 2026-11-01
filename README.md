@@ -1,5 +1,5 @@
 
-# 👤 Face Attendance Tracker
+# Face Attendance Tracker
 
 A smart **employee attendance management system** that uses **facial recognition** to automatically record employee check-ins and check-outs.
 
@@ -7,95 +7,95 @@ Instead of manually entering attendance, employees simply stand in front of a ca
 
 ---
 
-## ✨ Features
+## Features
 
-* 📷 **Face-based attendance**
+* **Face-based attendance**
 
-  * Detect and recognize employees using a camera.
-* 🧠 **SFace recognition**
+ * Detect and recognize employees using a camera.
+* **SFace recognition**
 
-  * Deep 128-dimensional face embeddings matched by cosine distance, instead of the older LBPH histogram model. Robust to lighting and much better at telling similar-looking people apart.
-* 🟢 **Automatic Check-In**
+ * Deep 128-dimensional face embeddings matched by cosine distance, instead of the older LBPH histogram model. Robust to lighting and much better at telling similar-looking people apart.
+* **Automatic Check-In**
 
-  * First successful scan of the day records the employee's check-in time.
-* 🔴 **Automatic Check-Out**
+ * First successful scan of the day records the employee's check-in time.
+* **Automatic Check-Out**
 
-  * A later scan records the employee's check-out time.
-* ⏱️ **Working Hours Calculation**
+ * A later scan records the employee's check-out time.
+* **Working Hours Calculation**
 
-  * Automatically calculates the employee's total working duration.
-* 🕘 **Fixed 09:30 Shift Start**
+ * Automatically calculates the employee's total working duration.
+* **Fixed 09:30 Shift Start**
 
-  * Office check-ins after `LATE_AT` (default **09:30**) are marked **Late**, on the server.
-* 🚚 **Field / Ground Crew Mode**
+ * Office check-ins after `LATE_AT` (default **09:30**) are marked **Late**, on the server.
+* **Field / Ground Crew Mode**
 
-  * Delivery and ground-crew staff are not on a shift: each scan logs a single **visit**, with no check-out, no hours and no late marking — as many visits per day as they make. Reported separately from office attendance.
-* ⏸️ **Check-In Buffer**
+ * Delivery and ground-crew staff are not on a shift: each scan logs a single **visit**, with no check-out, no hours and no late marking — as many visits per day as they make. Reported separately from office attendance.
+* **Check-In Buffer**
 
-  * After any check-in, the next one is refused for `CHECKIN_BUFFER_SECONDS` (default 8) so two people cannot be recorded at once. Server-enforced, with `Retry-After`.
-* 👥 **Employee Registration**
+ * After any check-in, the next one is refused for `CHECKIN_BUFFER_SECONDS` (default 8) so two people cannot be recorded at once. Server-enforced, with `Retry-After`.
+* **Employee Registration**
 
-  * Add new employees and register their facial data.
-* 📊 **Attendance Records**
+ * Add new employees and register their facial data.
+* **Attendance Records**
 
-  * View daily attendance, field visits, and employee history.
-* 🖥️ **Admin Dashboard**
+ * View daily attendance, field visits, and employee history.
+* **Admin Dashboard**
 
-  * Manage employees and monitor attendance.
-* 🔐 **Face Verification**
+ * Manage employees and monitor attendance.
+* **Face Verification**
 
-  * Matches a detected face against registered employees before creating an attendance record.
-* 🚫 **Duplicate Scan Protection**
+ * Matches a detected face against registered employees before creating an attendance record.
+* **Duplicate Scan Protection**
 
-  * Prevents accidental repeated check-ins/check-outs.
-* ⏳ **Check-Out Buffer**
+ * Prevents accidental repeated check-ins/check-outs.
+* **Check-Out Buffer**
 
-  * A check-out scan is rejected until a minimum work buffer (default 4 hours, `MIN_CHECKOUT_HOURS`) has passed since check-in. Enforced on the server, not just the UI.
-* 🔒 **Secure Kiosk + Admin Console**
+ * A check-out scan is rejected until a minimum work buffer (default 4 hours, `MIN_CHECKOUT_HOURS`) has passed since check-in. Enforced on the server, not just the UI.
+* **Secure Kiosk + Admin Console**
 
-  * Employees use the public kiosk with their face and **no accounts or passwords**. All employee data, logs, and face enrollment live behind a password-protected administrator console.
-* 🗄️ **Encrypted at Rest**
+ * Employees use the public kiosk with their face and **no accounts or passwords**. All employee data, logs, and face enrollment live behind a password-protected administrator console.
+* **Encrypted at Rest**
 
-  * Employee details, attendance timestamps, and face templates are encrypted at rest with authenticated encryption using `ATTENDANCE_MASTER_KEY`.
+ * Employee details, attendance timestamps, and face templates are encrypted at rest with authenticated encryption using `ATTENDANCE_MASTER_KEY`.
 
 ---
 
-## 🧠 How It Works
+## How It Works
 
 ```text
-                    📷 Camera
-                       │
-                       ▼
-                ┌──────────────┐
-                │    OpenCV    │
-                │ Face Detect  │
-                └──────┬───────┘
-                       │
-                       ▼
-              Face Recognition
-                       │
-                       ▼
-                Employee Found?
-                 /           \
-               No             Yes
-               │               │
-               ▼               ▼
-          Unknown Face     Check Attendance
-                               │
-                    ┌──────────┴──────────┐
-                    │                     │
-              No attendance          Checked in
-                 today                 already
-                    │                     │
-                    ▼                     ▼
-                CHECK-IN              CHECK-OUT
-                    │                     │
-                    └──────────┬──────────┘
-                               ▼
-                          💾 Database
-                               │
-                               ▼
-                         📊 Dashboard
+ Camera
+ │
+ ▼
+ ┌──────────────┐
+ │ OpenCV │
+ │ Face Detect │
+ └──────┬───────┘
+ │
+ ▼
+ Face Recognition
+ │
+ ▼
+ Employee Found?
+ / \
+ No Yes
+ │ │
+ ▼ ▼
+ Unknown Face Check Attendance
+ │
+ ┌──────────┴──────────┐
+ │ │
+ No attendance Checked in
+ today already
+ │ │
+ ▼ ▼
+ CHECK-IN CHECK-OUT
+ │ │
+ └──────────┬──────────┘
+ ▼
+ Database
+ │
+ ▼
+ Dashboard
 ```
 
 ### Attendance Logic
@@ -104,23 +104,23 @@ The system determines the action automatically:
 
 ```text
 First scan of the day
-        ↓
-    CHECK-IN
-        ↓
+ ↓
+ CHECK-IN
+ ↓
 Employee works
-        ↓
+ ↓
 Second scan
-        ↓
+ ↓
 Has the check-out
 buffer (default 4h)
 passed since check-in?
-   /                 \
- No                   Yes
-  │                    │
-  │               CHECK-OUT
-  │                    │
-Rejected with         Calculate
-"unlocks at" time   working hours
+ / \
+ No Yes
+ │ │
+ │ CHECK-OUT
+ │ │
+Rejected with Calculate
+"unlocks at" time working hours
 ```
 
 Employees do not need to manually select **Check In** or **Check Out**.
@@ -154,7 +154,7 @@ worker, so no coordination is needed.
 
 ---
 
-## 🛠️ Tech Stack
+## Tech Stack
 
 ### Backend / Recognition
 
@@ -174,59 +174,59 @@ which is the failure that actually matters at a check-in desk.
 Details worth knowing:
 
 * The stored "template" is a **512-byte embedding, not a picture** — 50× smaller
-  than an LBPH crop, and it is encrypted before it is written anywhere.
+ than an LBPH crop, and it is encrypted before it is written anywhere.
 * A match is the **lowest** distance across all of that person's stored
-  embeddings, so enrolling several photos of the same person measurably helps.
+ embeddings, so enrolling several photos of the same person measurably helps.
 * Crops get **CLAHE** lighting normalisation first, so dim or unevenly lit faces
-  still match. (Verified: a face darkened to 45% brightness still matched at
-  distance 0.195 against a 0.363 threshold.)
+ still match. (Verified: a face darkened to 45% brightness still matched at
+ distance 0.195 against a 0.363 threshold.)
 * The model file (37 MB) is **downloaded and checksum-verified during the Docker
-  build**, not committed to git. If the download is wrong the build fails rather
-  than shipping a kiosk that cannot recognise anyone.
+ build**, not committed to git. If the download is wrong the build fails rather
+ than shipping a kiosk that cannot recognise anyone.
 * `FACE_THRESHOLD` is the accept/reject distance (default `0.363`, the
-  calibrated LFW-masked value). Lower it if wrong people are being accepted;
-  raise it if real staff are being refused.
+ calibrated LFW-masked value). Lower it if wrong people are being accepted;
+ raise it if real staff are being refused.
 * Cosine distance is computed in NumPy rather than with `FaceRecognizerSF.match`,
-  which returns wrong values in current OpenCV 5 builds (it reports `1.0` for
-  identical embeddings).
+ which returns wrong values in current OpenCV 5 builds (it reports `1.0` for
+ identical embeddings).
 * **Anyone enrolled under the old LBPH model must re-enrol once.** LBPH crops
-  are detected by size and skipped, with a warning in the log; such an employee
-  is reported as *not enrolled* so the admin UI offers a re-enroll instead of
-  leaving them permanently unrecognisable.
+ are detected by size and skipped, with a warning in the log; such an employee
+ is reported as *not enrolled* so the admin UI offers a re-enroll instead of
+ leaving them permanently unrecognisable.
 
 Improvements that never touch stored templates:
 
 * **Additive enrollment** — the *Add samples* path appends new embeddings to a
-  person's existing ones without ever deleting them; near-duplicate poses are
-  skipped and the per-person cap (default 5) is enforced by refusing further
-  additions, not by evicting. Because a match is the lowest distance across all
-  of a person's templates, every added sample makes recognition more forgiving.
+ person's existing ones without ever deleting them; near-duplicate poses are
+ skipped and the per-person cap (default 5) is enforced by refusing further
+ additions, not by evicting. Because a match is the lowest distance across all
+ of a person's templates, every added sample makes recognition more forgiving.
 * **Quality gates** — scans that are blurry, too dark, too bright, or with the
-  face too small are answered with an actionable `LOW_QUALITY` message ("hold
-  still", "move closer") instead of a silent reject. The **same gates run at
-  enrollment**, so a blurry or badly lit photo is skipped and reported ("2 of 5
-  photos were too blurry") instead of becoming a permanently useless template.
+ face too small are answered with an actionable `LOW_QUALITY` message ("hold
+ still", "move closer") instead of a silent reject. The **same gates run at
+ enrollment**, so a blurry or badly lit photo is skipped and reported ("2 of 5
+ photos were too blurry") instead of becoming a permanently useless template.
 * **Burst enrollment** — the admin camera captures **3 frames per submit**, so
-  a first enrollment gets lighting and pose coverage right away.
+ a first enrollment gets lighting and pose coverage right away.
 * **Multi-frame scans** — the kiosk sends a short 3-frame burst per attempt;
-  the backend only accepts a label that wins a majority, so one smeared frame
-  no longer fails a real person and one lucky frame can no longer clock a
-  stranger in.
+ the backend only accepts a label that wins a majority, so one smeared frame
+ no longer fails a real person and one lucky frame can no longer clock a
+ stranger in.
 * **Ambiguity gate** — when the two best matches are closer together than
-  `FACE_MARGIN` (default `0.04`), the scan is rejected rather than guessed.
+ `FACE_MARGIN` (default `0.04`), the scan is rejected rather than guessed.
 * **Near-miss coaching** — a scan that almost matches (within `FACE_NEAR_MISS`
-  of the threshold) tells the employee to ask an admin for more photos — the
-  exact fix for the failure, surfaced at the moment it happens.
+ of the threshold) tells the employee to ask an admin for more photos — the
+ exact fix for the failure, surfaced at the moment it happens.
 * **Liveness heuristic** — a burst whose frames are pixel-identical (a held-up
-  photo or frozen screen) is rejected with "move slightly and try again". It is
-  a cheap first step, not a security boundary, and is disabled with
-  `FACE_MIN_MOTION=0`.
+ photo or frozen screen) is rejected with "move slightly and try again". It is
+ a cheap first step, not a security boundary, and is disabled with
+ `FACE_MIN_MOTION=0`.
 * **YuNet detector** — set `FACE_DETECTOR=yunet` to replace the Haar cascade
-  with the tiny YuNet DNN, which is markedly better at side angles and partial
-  faces. Storage is untouched; validate it on live scans before making it the
-  default for a site. The model ships in the Docker image next to SFace.
+ with the tiny YuNet DNN, which is markedly better at side angles and partial
+ faces. Storage is untouched; validate it on live scans before making it the
+ default for a site. The model ships in the Docker image next to SFace.
 * **Sample counts** — the employee list shows how many stored samples each
-  person has, so an admin can tell at a glance who needs another enrollment.
+ person has, so an admin can tell at a glance who needs another enrollment.
 
 ### Database
 
@@ -245,36 +245,36 @@ Improvements that never touch stored templates:
 
 ---
 
-## 📁 Project Structure
+## Project Structure
 
 ```text
 face-attendance-tracker/
 │
 ├── backend/
-│   ├── main.py            # FastAPI app: admin console, public scan kiosk
-│   ├── face_recognition.py# detector (Haar/YuNet) + SFace embeddings, quality gates, voting
-│   ├── face_store.py      # encrypted template storage (files or Postgres)
-│   ├── attendance.py      # check-in/out, visits, buffers, working hours
-│   ├── store.py           # employee/attendance data access
-│   ├── database.py        # SQLite / PostgreSQL connection layer
-│   ├── security.py        # encryption, sessions, password check
-│   ├── limits.py          # in-process rate limiting
-│   ├── scheduler.py       # once-daily Excel/backup sync
-│   ├── excel_sync.py      # Excel workbook upload (OneDrive for Business)
-│   ├── backup_sync.py     # encrypted database backups
-│   ├── onedrive.py        # Microsoft Graph client
-│   ├── seed_data.py       # boot-time roster + template restore
-│   └── models/            # SFace + YuNet onnx (fetched at build, gitignored)
+│ ├── main.py # FastAPI app: admin console, public scan kiosk
+│ ├── face_recognition.py# detector (Haar/YuNet) + SFace embeddings, quality gates, voting
+│ ├── face_store.py # encrypted template storage (files or Postgres)
+│ ├── attendance.py # check-in/out, visits, buffers, working hours
+│ ├── store.py # employee/attendance data access
+│ ├── database.py # SQLite / PostgreSQL connection layer
+│ ├── security.py # encryption, sessions, password check
+│ ├── limits.py # in-process rate limiting
+│ ├── scheduler.py # once-daily Excel/backup sync
+│ ├── excel_sync.py # Excel workbook upload (OneDrive for Business)
+│ ├── backup_sync.py # encrypted database backups
+│ ├── onedrive.py # Microsoft Graph client
+│ ├── seed_data.py # boot-time roster + template restore
+│ └── models/ # SFace + YuNet onnx (fetched at build, gitignored)
 │
 ├── frontend/
-│   ├── src/
-│   ├── public/
-│   └── package.json
+│ ├── src/
+│ ├── public/
+│ └── package.json
 │
 ├── data/
-│   └── .gitkeep
+│ └── .gitkeep
 │
-├── .github/workflows/ci.yml   # tests + frontend build on every push
+├── .github/workflows/ci.yml # tests + frontend build on every push
 ├── requirements.txt
 ├── Dockerfile
 ├── render.yaml
@@ -286,7 +286,7 @@ face-attendance-tracker/
 
 ---
 
-## 🚀 Getting Started
+## Getting Started
 
 ### 1. Clone the repository
 
@@ -329,7 +329,7 @@ python main.py
 
 ---
 
-## 👤 Employee Registration
+## Employee Registration
 
 Before an employee can use the attendance system, their facial data needs to be registered.
 
@@ -337,61 +337,61 @@ Example flow:
 
 ```text
 Employee Registration
-        │
-        ▼
+ │
+ ▼
 Enter Employee Details
-        │
-        ▼
+ │
+ ▼
 Capture Face
-        │
-        ▼
+ │
+ ▼
 Generate Face Embedding
-        │
-        ▼
+ │
+ ▼
 Store Employee Record
-        │
-        ▼
-Employee Ready ✅
+ │
+ ▼
+Employee Ready 
 ```
 
 Example employee record:
 
 ```text
 Employee ID : EMP001
-Name        : John Doe
-Department  : Development
-Face Data   : Registered
+Name : John Doe
+Department : Development
+Face Data : Registered
 ```
 
 ---
 
-## 📅 Attendance Record
+## Attendance Record
 
 Each attendance entry can contain information such as:
 
-| Field        | Description                |
+| Field | Description |
 | ------------ | -------------------------- |
-| Employee ID  | Unique employee identifier |
-| Date         | Attendance date            |
-| Check-In     | Time employee arrived      |
-| Check-Out    | Time employee left         |
-| Hours Worked | Total working duration     |
-| Status       | Present / Late / etc.      |
+| Employee ID | Unique employee identifier |
+| Date | Attendance date |
+| Check-In | Time employee arrived |
+| Check-Out | Time employee left |
+| Hours Worked | Total working duration |
+| Status | Present / Late / etc. |
 
 Example:
 
 ```text
 Employee: EMP001
-Date:     2026-09-17
+Date: 2026-09-17
 Check-In: 09:31 AM
 Check-Out: 06:12 PM
-Worked:   8h 41m
-Status:   Present
+Worked: 8h 41m
+Status: Present
 ```
 
 ---
 
-## 🔒 Privacy & Security
+## Privacy & Security
 
 Facial recognition involves **biometric information**, so the system should be designed with privacy and security in mind.
 
@@ -408,14 +408,14 @@ Recommended practices:
 
 ---
 
-## 🔐 Access Model & Deployment
+## Access Model & Deployment
 
 The tracker has exactly two experiences, so nothing depends on employees remembering passwords or keys.
 
-| Who                | How they sign in               | What they can do                                   |
+| Who | How they sign in | What they can do |
 | ------------------ | ------------------------------ | -------------------------------------------------- |
-| **Employees**      | Face scan at the public kiosk  | Check in / check out only — no data is exposed     |
-| **Administrators** | Password on the admin console  | Enroll faces, manage employees, view all logs      |
+| **Employees** | Face scan at the public kiosk | Check in / check out only — no data is exposed |
+| **Administrators** | Password on the admin console | Enroll faces, manage employees, view all logs |
 
 * The kiosk scan route is the only public API. It only creates attendance for an **enrolled, active, recognized** face.
 * **Enrollment is never public** — only an administrator can register an employee and capture their face, so strangers can't add themselves to the system.
@@ -426,25 +426,25 @@ The tracker has exactly two experiences, so nothing depends on employees remembe
 
 1. Install dependencies and copy the example config:
 
-   ```bash
-   pip install -r requirements.txt
-   cp .env.example .env
-   ```
+ ```bash
+ pip install -r requirements.txt
+ cp .env.example .env
+ ```
 
 2. Edit `.env`:
 
-   * `ADMIN_PASSWORD` — choose a strong random value. This is the **only** password in the system; keep it with the company owner(s), not printed in the office.
-   * `ATTENDANCE_MASTER_KEY` — generate one with `python -c "import secrets; print(secrets.token_urlsafe(48))"`. It encrypts all employee data and face templates at rest. Back it up; losing it makes encrypted data unrecoverable.
-   * `MIN_CHECKOUT_HOURS` — the minimum time between check-in and check-out (the work buffer). Default `4`.
-   * `ALLOWED_ORIGINS` — the exact browser origin (your kiosk/server hostname). Never `*`.
-   * `ENVIRONMENT=production` to enable secure cookies.
+ * `ADMIN_PASSWORD` — choose a strong random value. This is the **only** password in the system; keep it with the company owner(s), not printed in the office.
+ * `ATTENDANCE_MASTER_KEY` — generate one with `python -c "import secrets; print(secrets.token_urlsafe(48))"`. It encrypts all employee data and face templates at rest. Back it up; losing it makes encrypted data unrecoverable.
+ * `MIN_CHECKOUT_HOURS` — the minimum time between check-in and check-out (the work buffer). Default `4`.
+ * `ALLOWED_ORIGINS` — the exact browser origin (your kiosk/server hostname). Never `*`.
+ * `ENVIRONMENT=production` to enable secure cookies.
 
 3. Build the frontend once, then start:
 
-   ```bash
-   cd frontend && npm install && npm run build && cd ..
-   python main.py
-   ```
+ ```bash
+ cd frontend && npm install && npm run build && cd ..
+ python main.py
+ ```
 
 4. Open the app, go to **Employees → Register Employee**, add each person, and **Enroll** their face from the admin console. Verify one real check-in followed by an early rejected check-out before opening the kiosk to staff.
 
@@ -458,13 +458,13 @@ is lost each time. Point `DATABASE_URL` at a managed PostgreSQL database and the
 attendance history survives redeploys.
 
 1. Create a free database (for example Neon or Supabase) and copy its
-   **pooled** connection string — the one ending in `-pooler`. The app holds a
-   small connection pool open, so the pooled endpoint avoids exhausting the
-   provider's connection limit.
+ **pooled** connection string — the one ending in `-pooler`. The app holds a
+ small connection pool open, so the pooled endpoint avoids exhausting the
+ provider's connection limit.
 2. Set it in the host's environment as `DATABASE_URL`, and set `PG_POOL_MAX` to a
-   small number such as `5` on free tiers.
+ small number such as `5` on free tiers.
 3. Restart. `GET /api/health` reports `"database": "postgres"` once it is
-   connected. Tables are created automatically on first start.
+ connected. Tables are created automatically on first start.
 
 Leave `DATABASE_URL` unset to keep using SQLite. If `DATABASE_URL` is set but
 unreachable, the app fails to start rather than silently falling back to an empty
@@ -480,7 +480,7 @@ kiosk's disk persists.
 
 ---
 
-## 📊 Microsoft 365 / Excel Sync + Encrypted Backup *(optional)*
+## Microsoft 365 / Excel Sync + Encrypted Backup *(optional)*
 
 Push attendance records to a real **Excel** workbook in **OneDrive for Business** every day, and take **encrypted backups** of the whole database (including face templates) so data survives cloud restarts.
 
@@ -492,30 +492,30 @@ Push attendance records to a real **Excel** workbook in **OneDrive for Business*
 
 1. Sign in to [portal.azure.com](https://portal.azure.com) with your **Microsoft 365 admin/owner** account.
 2. **Microsoft Entra ID → App registrations → New registration**:
-   * Name: `Attendance Tracker`
-   * *Supported account types*: **Accounts in this organizational directory only**
-   * Register.
+ * Name: `Attendance Tracker`
+ * *Supported account types*: **Accounts in this organizational directory only**
+ * Register.
 3. On the app's **Overview** page copy:
-   * **Application (client) ID** → `MS_CLIENT_ID`
-   * **Directory (tenant) ID** → `MS_TENANT_ID`
+ * **Application (client) ID** → `MS_CLIENT_ID`
+ * **Directory (tenant) ID** → `MS_TENANT_ID`
 4. **Certificates & secrets → Client secrets → New client secret** → copy the **Value** immediately → `MS_CLIENT_SECRET`.
 5. **API permissions → Add a permission → Microsoft Graph → Application permissions** → add **`Files.ReadWrite.All`** → **Grant admin consent** (you are the admin, so it applies instantly).
 6. `MS_DRIVE_UPN` = the **email/UPN** of the OneDrive for Business account that should receive the exports (e.g. `you@yourcompany.com`). That user just needs a normal Business Basic license.
 
 ### Environment variables
 
-| Variable             | Purpose                                             | Example |
+| Variable | Purpose | Example |
 | -------------------- | --------------------------------------------------- | ------- |
-| `MS_CLIENT_ID`       | Entra app (client) ID (step 3)                      | `62cd…` |
-| `MS_CLIENT_SECRET`   | Entra app client secret (step 4)                    | `abc…`  |
-| `MS_TENANT_ID`       | Entra directory (tenant) ID (step 3)                | `e1d…`  |
-| `MS_DRIVE_UPN`       | OneDrive owner's email (step 6)                     | `owner@company.com` |
-| `MS_FOLDER`          | OneDrive folder for workbook + backups              | `Attendance Tracker` |
-| `MS_EXCEL_FILENAME`  | Excel workbook name                                 | `Attendance.xlsx` |
-| `MS_SYNC_TIME`       | Daily sync time in **UTC** (`HH:MM`)                | `23:30` |
-| `MS_BACKUP_KEEP`     | Encrypted backups to keep (older ones pruned)       | `14` |
-| `MS_EXCEL_ENABLED`   | Set `0` to disable the Excel push only              | `1` |
-| `MS_BACKUP_ENABLED`  | Set `0` to disable the encrypted backup only        | `1` |
+| `MS_CLIENT_ID` | Entra app (client) ID (step 3) | `62cd…` |
+| `MS_CLIENT_SECRET` | Entra app client secret (step 4) | `abc…` |
+| `MS_TENANT_ID` | Entra directory (tenant) ID (step 3) | `e1d…` |
+| `MS_DRIVE_UPN` | OneDrive owner's email (step 6) | `owner@company.com` |
+| `MS_FOLDER` | OneDrive folder for workbook + backups | `Attendance Tracker` |
+| `MS_EXCEL_FILENAME` | Excel workbook name | `Attendance.xlsx` |
+| `MS_SYNC_TIME` | Daily sync time in **UTC** (`HH:MM`) | `23:30` |
+| `MS_BACKUP_KEEP` | Encrypted backups to keep (older ones pruned) | `14` |
+| `MS_EXCEL_ENABLED` | Set `0` to disable the Excel push only | `1` |
+| `MS_BACKUP_ENABLED` | Set `0` to disable the encrypted backup only | `1` |
 
 ### How it works
 
@@ -526,7 +526,7 @@ Push attendance records to a real **Excel** workbook in **OneDrive for Business*
 
 ---
 
-## 🛡️ Anti-Spoofing
+## Anti-Spoofing
 
 A first heuristic already ships: a multi-frame burst whose frames are
 pixel-identical — a held-up photo or a frozen screen — is rejected with an
@@ -536,31 +536,31 @@ conservative and is **not** a security boundary.
 A future version will include proper **liveness detection** to further reduce
 attempts to authenticate using:
 
-* 📱 Photos
-* 🖼️ Printed images
-* 📺 Screens displaying an employee's face
-* 🎭 Other simple presentation attacks
+* Photos
+* Printed images
+* Screens displaying an employee's face
+* Other simple presentation attacks
 
 Planned flow:
 
 ```text
 Face Detected
-     ↓
+ ↓
 Liveness Check
-     ↓
+ ↓
 Real Person?
-   /       \
- No         Yes
- │           │
-Reject    Recognize
-             │
-             ▼
-        Record Attendance
+ / \
+ No Yes
+ │ │
+Reject Recognize
+ │
+ ▼
+ Record Attendance
 ```
 
 ---
 
-## 🗺️ Roadmap
+## Roadmap
 
 ### Phase 1 — Core System
 
@@ -609,15 +609,15 @@ Reject    Recognize
 
 ---
 
-## ⚠️ Current Status
+## Current Status
 
-🚧 **Under Development**
+ **Under Development**
 
 This project is currently being developed and features may change as the system evolves.
 
 ---
 
-## 🤝 Contributing
+## Contributing
 
 Contributions, ideas, and improvements are welcome.
 
@@ -644,7 +644,7 @@ git push origin feature/your-feature
 
 ---
 
-## 📜 License
+## License
 
 This project is licensed under the **MIT License**.
 
@@ -652,16 +652,15 @@ See [`LICENSE`](LICENSE) for more information.
 
 ---
 
-## 👨‍💻 Author
+## Author
 
 **Lunatic Layman**
 
-Built with ❤️ using Python, OpenCV, and modern web technologies.
+Built with using Python, OpenCV, and modern web technologies.
 
 ---
 
-⭐ If you find this project useful, consider giving the repository a star!
-
+ If you find this project useful, consider giving the repository a star!
 
 ## Deployment and data-preservation notes
 
