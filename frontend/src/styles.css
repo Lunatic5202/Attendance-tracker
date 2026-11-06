@@ -1059,3 +1059,19 @@ input[type="checkbox"] {
   .confirmation-message { font-size: .94rem; }
   .late-note { border-radius: 12px; line-height: 1.4; }
 }
+
+/* ---- Phone-number fallback (kiosk) ---- */
+.phone-fallback{margin-top:.8rem}
+.phone-toggle{width:100%;font-family:var(--font-mono);font-size:.66rem;letter-spacing:.12em;text-transform:uppercase;padding:.8rem 1rem;border:1px dashed var(--line-strong);border-radius:var(--radius);background:transparent;color:var(--navy);cursor:pointer;transition:background .18s var(--ease-out),border-color .18s var(--ease-out)}
+.phone-toggle:hover{background:var(--paper);border-color:var(--navy-light)}
+.phone-form{display:grid;gap:.5rem;padding:.9rem;border:1px solid var(--line-strong);border-radius:var(--radius);background:var(--white)}
+.phone-form label{font-family:var(--font-mono);font-size:.62rem;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
+.phone-row{display:flex;gap:.5rem}
+.phone-row .input{flex:1;min-width:0;font-size:1.05rem;letter-spacing:.06em}
+.phone-row .btn{width:auto;margin-top:0;white-space:nowrap}
+.phone-error{font-size:.8rem;color:var(--danger)}
+.phone-help{font-size:.58rem;letter-spacing:.1em;color:var(--muted)}
+.phone-cancel{justify-self:start;background:none;border:0;padding:0;font-family:var(--font-mono);font-size:.62rem;letter-spacing:.1em;text-transform:uppercase;color:var(--navy);cursor:pointer;text-decoration:underline}
+.phone-note{margin:.2rem 0 .6rem;font-family:var(--font-mono);font-size:.62rem;letter-spacing:.12em;text-transform:uppercase;opacity:.7}
+.snap-link{margin-left:.45rem;font-family:var(--font-mono);font-size:.58rem;letter-spacing:.08em;text-transform:uppercase;color:var(--navy);text-decoration:underline}
+@media (max-width: 680px){.phone-row{flex-direction:column}.phone-row .btn{width:100%}}

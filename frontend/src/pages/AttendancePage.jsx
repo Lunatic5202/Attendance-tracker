@@ -7,6 +7,7 @@ export default function AttendancePage() {
   const [employees, setEmployees] = useState([])
   const [rows, setRows] = useState([])
   const [visits, setVisits] = useState([])
+  const [snaps, setSnaps] = useState([])
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -22,7 +23,37 @@ export default function AttendancePage() {
       .then(setVisits)
       .catch(() => setVisits([]))
       .finally(() => setLoading(false))
+    // Snapshots are kept only for phone-number check-ins (see backend/phone_checkin.py).
+    api.snapshots(date, empId || undefined)
+      .then(setSnaps)
+      .catch(() => setSnaps([]))
   }, [date, empId])
+
+  // Latest snapshot per employee for the selected day, keyed by employee id.
+  const snapFor = (employeeId) => {
+    const own = snaps.filter((s) => s.employee_id === employeeId)
+    return own.length ? own[own.length - 1] : null
+  }
+
+  const sourceCell = (row) => {
+    const snap = row.source === 'phone' ? snapFor(row.employee_id) : null
+    return (
+      <>
+        <span className={`badge plain ${row.source === 'manual' || row.source === 'phone' ? 'warn' : ''}`}>{row.source}</span>
+        {snap && (
+          <a
+            className="snap-link"
+            href={`/api/attendance/snapshots/${snap.id}/image`}
+            target="_blank"
+            rel="noreferrer"
+            title={snap.face_detected === false ? 'No face was visible in this snapshot' : 'View check-in snapshot'}
+          >
+            {snap.face_detected === false ? 'photo · no face' : 'photo'}
+          </a>
+        )}
+      </>
+    )
+  }
 
   function exportCsv() {
     const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`
@@ -110,7 +141,7 @@ export default function AttendancePage() {
                         <span className={`badge ${r.status === 'Late' ? 'warn' : 'ok'}`}>{r.status}</span>
                       </td>
                       <td>
-                        <span className={`badge plain ${r.source === 'manual' ? 'warn' : ''}`}>{r.source}</span>
+                        {sourceCell(r)}
                       </td>
                     </tr>
                   ))}
@@ -145,7 +176,7 @@ export default function AttendancePage() {
                       <td className="muted-cell">{v.department}</td>
                       <td className="mono">{fmtTime(v.visited_at)}</td>
                       <td>
-                        <span className={`badge plain ${v.source === 'manual' ? 'warn' : ''}`}>{v.source}</span>
+                        {sourceCell(v)}
                       </td>
                     </tr>
                   ))}

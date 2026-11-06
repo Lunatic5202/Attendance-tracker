@@ -25,6 +25,11 @@ export default function Scan() {
   const [camError, setCamError] = useState(null)
   const [last, setLast] = useState(null)
   const [confirmation, setConfirmation] = useState(null)
+  const [phoneAllowed, setPhoneAllowed] = useState(true)
+  const [phoneOpen, setPhoneOpen] = useState(false)
+  const [phone, setPhone] = useState('')
+  const [phoneBusy, setPhoneBusy] = useState(false)
+  const [phoneError, setPhoneError] = useState(null)
   const [log, setLog] = useState([
     { t: 'SYS', s: 'attendance relay online — awaiting camera frames…', tone: '' },
   ])
@@ -35,10 +40,21 @@ export default function Scan() {
   const logBox = useRef(null)
   const asleepRef = useRef(false)
   const lastActivity = useRef(Date.now())
+  const camRef = useRef(null)
+  const phoneOpenRef = useRef(false)
 
   useEffect(() => {
     asleepRef.current = asleep
   }, [asleep])
+
+  useEffect(() => {
+    phoneOpenRef.current = phoneOpen
+  }, [phoneOpen])
+
+  // Hide the phone fallback when an administrator has switched it off.
+  useEffect(() => {
+    api.health().then((h) => setPhoneAllowed(h.phone_fallback !== false)).catch(() => {})
+  }, [])
 
   const poke = useCallback(() => {
     lastActivity.current = Date.now()
@@ -51,7 +67,7 @@ export default function Scan() {
 
   useEffect(() => {
     const t = setInterval(() => {
-      if (asleepRef.current) return
+      if (asleepRef.current || phoneOpenRef.current) return
       if (Date.now() - lastActivity.current >= IDLE_SLEEP_MS) setAsleep(true)
     }, 3000)
     return () => clearInterval(t)
@@ -70,7 +86,7 @@ export default function Scan() {
     setLog((cur) => [...cur.slice(-29), { t, s, tone }])
 
   const runScan = useCallback(async (frames) => {
-    if (lock.current || asleepRef.current || confirmationRef.current) return
+    if (lock.current || asleepRef.current || confirmationRef.current || phoneOpenRef.current) return
     lock.current = true
     try {
       handleResult(await api.scan(frames, undefined))
@@ -132,7 +148,47 @@ export default function Scan() {
     }, 5200)
   }
 
-  function handleResult(res) {
+  function openPhone() {
+    poke()
+    setAsleep(false)
+    setPhone('')
+    setPhoneError(null)
+    setPhoneOpen(true)
+  }
+
+  function closePhone() {
+    setPhoneOpen(false)
+    setPhone('')
+    setPhoneError(null)
+    poke()
+  }
+
+  async function submitPhone(e) {
+    e.preventDefault()
+    if (phoneBusy || confirmationRef.current) return
+    if (phone.replace(/\D/g, '').length < 6) {
+      setPhoneError('Enter the full phone number.')
+      return
+    }
+    poke()
+    setPhoneBusy(true)
+    setPhoneError(null)
+    // The snapshot is taken at the moment of submit, from the live camera.
+    const image = camRef.current?.capture() || null
+    let res
+    try {
+      res = await api.phoneCheckin(phone, image)
+    } catch (err) {
+      res = err.data && err.data.action ? err.data : { action: 'UNKNOWN', message: err.message }
+    } finally {
+      setPhoneBusy(false)
+    }
+    handleResult(res, { phone: true })
+    if (['CHECK-IN', 'CHECK-OUT', 'VISIT'].includes(res.action)) closePhone()
+    else setPhoneError(res.message || 'Could not check you in. Try again.')
+  }
+
+  function handleResult(res, opts = {}) {
     const action = res.action || 'UNKNOWN'
     const now = star()
     setLast({ action, employee: res.employee, attendance: res.attendance, message: res.message, time: now })
@@ -144,10 +200,13 @@ export default function Scan() {
         employee: res.employee,
         time: now,
         late: res.attendance?.status === 'Late',
+        phone: opts.phone,
       })
       pushLog('SCAN', `${res.employee?.name} — CHECK-IN @${now}`, 'ok-line')
       toast(`${res.employee?.name} checked in · ${now}`, { ok: true })
     } else if (action === 'VISIT') {
+      // Face scans keep their toast; the phone fallback gets the welcome dialog too.
+      if (opts.phone) openConfirmation({ kind: 'visit', employee: res.employee, time: now, phone: true })
       pushLog('SCAN', `${res.employee?.name} — VISIT @${now}`, 'ok-line')
       toast(`${res.employee?.name} visit logged · ${now}`, { ok: true })
     } else if (action === 'CHECK-OUT') {
@@ -157,6 +216,7 @@ export default function Scan() {
         employee: res.employee,
         time: now,
         hours: hrs,
+        phone: opts.phone,
       })
       pushLog('SCAN', `${res.employee?.name} — CHECK-OUT @${now} (${hrs})`, 'ok-line')
       toast(`${res.employee?.name} checked out · ${hrs}`, { ok: true })
@@ -203,18 +263,58 @@ export default function Scan() {
       <div className="scan-grid">
         <div className="cam-col">
           <CameraCapture
-            active={scanning || asleep}
+            ref={camRef}
+            active={scanning || asleep || phoneOpen}
             watch={scanning || asleep}
             motionThreshold={0.05}
             onMotion={onMotion}
             onError={setCamError}
-            onBurst={runScan}
+            onBurst={phoneOpen ? undefined : runScan}
             burst={3}
           />
           <div className="cam-caption">
-            <span>TARGET FRAME — HOLD STILL</span>
-            <span className="mono">{scanning ? 'CAM 01 · LIVE' : 'CAM 01 · PAUSED'}</span>
+            <span>{phoneOpen ? 'LOOK AT THE CAMERA — PHOTO ON SUBMIT' : 'TARGET FRAME — HOLD STILL'}</span>
+            <span className="mono">{scanning || phoneOpen ? 'CAM 01 · LIVE' : 'CAM 01 · PAUSED'}</span>
           </div>
+
+          {phoneAllowed && (
+            <div className="phone-fallback">
+              {!phoneOpen ? (
+                <button type="button" className="phone-toggle" onClick={openPhone}>
+                  Can’t scan? Use your phone number
+                </button>
+              ) : (
+                <form className="phone-form" onSubmit={submitPhone}>
+                  <label htmlFor="phone-input">Registered phone number</label>
+                  <div className="phone-row">
+                    <input
+                      id="phone-input"
+                      className="input"
+                      type="tel"
+                      inputMode="numeric"
+                      autoComplete="off"
+                      autoFocus
+                      maxLength={20}
+                      placeholder="e.g. 98300 12345"
+                      value={phone}
+                      disabled={phoneBusy}
+                      onChange={(e) => {
+                        poke()
+                        setPhone(e.target.value)
+                        if (phoneError) setPhoneError(null)
+                      }}
+                    />
+                    <button className="btn" type="submit" disabled={phoneBusy || !phone.trim()}>
+                      {phoneBusy ? 'Checking…' : 'Check in'}
+                    </button>
+                  </div>
+                  {phoneError && <div className="phone-error" role="alert">{phoneError}</div>}
+                  <div className="phone-help mono">A snapshot is taken from the camera when you submit.</div>
+                  <button type="button" className="phone-cancel" onClick={closePhone}>← Back to face scan</button>
+                </form>
+              )}
+            </div>
+          )}
         </div>
 
         <div className="result-panel">
@@ -297,7 +397,7 @@ export default function Scan() {
                 <path className="confirmation-check" d="M14 27.5 22 35l16-18" />
               </svg>
             </div>
-            <div className="confirmation-kicker">{confirmation.late ? 'Late arrival noted' : confirmation.kind === 'check-in' ? 'Attendance recorded' : 'Day complete'}</div>
+            <div className="confirmation-kicker">{confirmation.late ? 'Late arrival noted' : confirmation.kind === 'check-in' ? 'Attendance recorded' : confirmation.kind === 'visit' ? 'Visit recorded' : 'Day complete'}</div>
             <h2 id="confirmation-title">
               {confirmation.late ? 'You made it.' : greeting}, <b>{confirmation.employee?.name?.split(' ')[0] || 'there'}</b>
             </h2>
@@ -306,8 +406,11 @@ export default function Scan() {
                 ? `Your check-in was recorded at ${confirmation.time}. We marked this arrival as late.`
                 : confirmation.kind === 'check-in'
                   ? `You’re checked in for today at ${confirmation.time}. Have a great day!`
-                  : `You’re checked out at ${confirmation.time}. You worked ${confirmation.hours}. See you next time!`}
+                  : confirmation.kind === 'visit'
+                    ? `Your visit was logged at ${confirmation.time}. Thanks for stopping by!`
+                    : `You’re checked out at ${confirmation.time}. You worked ${confirmation.hours}. See you next time!`}
             </p>
+            {confirmation.phone && <div className="phone-note">Verified with your phone number</div>}
             {confirmation.late && <div className="late-note"><span className="late-spark">✦</span> Late arrival recorded — no further action needed.</div>}
             <button className={`btn confirmation-button ${confirmation.late ? 'bolt' : ''}`} onClick={closeConfirmation}>Continue</button>
             <div className="confirmation-auto-close">closing automatically</div>

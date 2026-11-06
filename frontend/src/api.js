@@ -64,6 +64,16 @@ export const api = {
     const frames = Array.isArray(images) ? images : [images]
     return req('/attendance/scan', { method: 'POST', body: JSON.stringify({ images: frames, employee_id: employeeId }) })
   },
+  // Fallback for people whose face cannot be scanned: registered number + camera snapshot.
+  phoneCheckin: (phone, image) =>
+    req('/attendance/phone', { method: 'POST', body: JSON.stringify({ phone, image }) }),
+  // Admin: metadata of phone check-in snapshots (images load from /api/attendance/snapshots/:id/image).
+  snapshots: (date, employeeId) => {
+    const q = new URLSearchParams()
+    if (date) q.set('date', date)
+    if (employeeId) q.set('employee_id', employeeId)
+    return req(`/attendance/snapshots?${q.toString()}`)
+  },
   manual: (employeeId, action) =>
     req('/attendance/manual', { method: 'POST', body: JSON.stringify({ employee_id: employeeId, action }) }),
 

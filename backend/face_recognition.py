@@ -24,6 +24,7 @@ simply trusts a client-provided employee id.
 
 import os
 import logging
+import threading
 from pathlib import Path
 
 import numpy as np
@@ -197,6 +198,20 @@ class OpenCVFaceEngine:
         #: before a burst is accepted. A held-up photo or frozen screen is
         #: pixel-identical across frames, so this is a cheap liveness heuristic.
         self.min_motion = float(os.getenv("FACE_MIN_MOTION", "0.5"))
+        #: Detection-only recovery on a miss (CLAHE + gamma on the luminance
+        #: channel). Boxes map 1:1 onto the original frame, so the embedding is
+        #: still cut from the untouched pixels and old templates stay valid.
+        self.enhance_retry = os.getenv("FACE_ENHANCE_RETRY", "1").strip() != "0"
+        #: When several faces are visible, boxes scoring at least this fraction
+        #: of the best score compete on size, so the person standing at the
+        #: kiosk beats a confident-but-distant bystander.
+        self.pick_ratio = float(os.getenv("FACE_PICK_RATIO", "0.75"))
+        #: Last-resort burst fusion: average the frame embeddings when the
+        #: per-frame vote finds no majority (see ``examine_multi``).
+        self.fuse_frames = os.getenv("FACE_FUSE_FRAMES", "1").strip() != "0"
+        #: The YuNet input size is set per call, so concurrent requests must
+        #: not interleave on the shared detector.
+        self._yunet_lock = threading.Lock()
         self._gallery = None
         self._gallery_sig = None
         self._skipped_legacy = 0
@@ -239,8 +254,26 @@ class OpenCVFaceEngine:
         )
         return faces
 
-    def _detect_yunet(self, image):
-        """Return face boxes, retrying a miss on an enlarged frame for small faces."""
+    def _enhance_for_detection(self, frame):
+        """Return a contrast/brightness-lifted copy of ``frame``, for detection only.
+
+        Same size as the source, so detected boxes apply to the original pixels.
+        """
+        cv2 = self.cv2
+        lightness, a, b = cv2.split(cv2.cvtColor(frame, cv2.COLOR_BGR2LAB))
+        lightness = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8)).apply(lightness)
+        if float(lightness.mean()) < 90:
+            gamma = (np.linspace(0.0, 1.0, 256) ** 0.6 * 255).astype(np.uint8)
+            lightness = cv2.LUT(lightness, gamma)
+        return cv2.cvtColor(cv2.merge([lightness, a, b]), cv2.COLOR_LAB2BGR)
+
+    def _detect_yunet_rows(self, image):
+        """Return YuNet rows (confidence-sorted), or None when nothing was found.
+
+        Passes run only on a miss, cheapest first: the frame as-is, an enlarged
+        copy (small/distant faces), then a contrast-enhanced copy (dim or
+        backlit rooms). Coordinates are always mapped back to the source frame.
+        """
         frame = image if len(image.shape) == 3 else self.cv2.cvtColor(image, self.cv2.COLOR_GRAY2BGR)
 
         def run_detector(buffer):
@@ -250,34 +283,69 @@ class OpenCVFaceEngine:
             detected = result[1] if isinstance(result, tuple) else result
             return None if detected is None or len(detected) == 0 else np.asarray(detected)
 
-        faces = run_detector(frame)
         scale = float(os.getenv("FACE_YUNET_FALLBACK_SCALE", "1.5"))
-        if faces is None and scale > 1.0:
-            # A second pass costs time only on a miss and can recover smaller,
-            # farther-away faces. Coordinates are mapped back to the source frame.
-            enlarged = self.cv2.resize(
-                frame, None, fx=scale, fy=scale, interpolation=self.cv2.INTER_CUBIC
-            )
-            faces = run_detector(enlarged)
-            if faces is not None:
-                faces = faces.copy()
-                faces[:, :4] /= scale
+        with self._yunet_lock:
+            faces = run_detector(frame)
+            if faces is None and scale > 1.0:
+                enlarged = self.cv2.resize(
+                    frame, None, fx=scale, fy=scale, interpolation=self.cv2.INTER_CUBIC
+                )
+                faces = run_detector(enlarged)
+                if faces is not None:
+                    faces = faces.copy()
+                    faces[:, : min(14, faces.shape[1])] /= scale
+            if faces is None and self.enhance_retry:
+                faces = run_detector(self._enhance_for_detection(frame))
 
         if faces is None:
-            return np.empty((0, 4), dtype=np.int32)
+            return None
         if faces.shape[1] >= 15:
             faces = faces[np.argsort(-faces[:, 14])]  # confidence column
+        return faces
+
+    def _detect_yunet(self, image):
+        """Return face boxes (x, y, w, h), most confident first."""
+        faces = self._detect_yunet_rows(image)
+        if faces is None:
+            return np.empty((0, 4), dtype=np.int32)
         return np.round(faces[:, :4]).astype(np.int32)
 
+    def _pick_face(self, rows):
+        """Choose the face at the kiosk from confidence-sorted YuNet rows."""
+        if rows.shape[1] >= 15:
+            rows = rows[rows[:, 14] >= float(rows[0, 14]) * self.pick_ratio]
+        return rows[int(np.argmax(rows[:, 2] * rows[:, 3]))]
+
+    @staticmethod
+    def _clamp_box(box, shape):
+        """Clip a box to the frame; ``None`` if too little of the face is inside.
+
+        Boxes near an edge can start at a negative coordinate, which NumPy
+        slicing reads as "from the far side" and hands back an empty crop. A box
+        that lies fully inside the frame comes back unchanged, so no stored
+        template is affected. A face cut off by more than a third is rejected
+        rather than squashed into a distorted embedding.
+        """
+        x, y, w, h = (int(v) for v in box[:4])
+        height, width = shape[:2]
+        x0, y0 = max(x, 0), max(y, 0)
+        x1, y1 = min(x + w, width), min(y + h, height)
+        if x1 - x0 < 2 or y1 - y0 < 2 or w <= 0 or h <= 0:
+            return None
+        if (x1 - x0) * (y1 - y0) < 0.65 * w * h:
+            return None
+        return x0, y0, x1 - x0, y1 - y0
+
     def _largest(self, image):
+        if self._yunet is not None:
+            rows = self._detect_yunet_rows(image)
+            if rows is None:
+                return None
+            return self._clamp_box(self._pick_face(rows), image.shape)
         faces = self.detect(image)
         if faces is None or len(faces) == 0:
             return None
-        if self._yunet is not None:
-            # YuNet rows arrive confidence-sorted; take the most certain box.
-            box = faces[0]
-            return int(box[0]), int(box[1]), int(box[2]), int(box[3])
-        return max(faces, key=lambda b: b[2] * b[3])
+        return self._clamp_box(max(faces, key=lambda b: b[2] * b[3]), image.shape)
 
     def _quality(self, image, crop) -> str | None:
         """Return a user-facing reason the crop is unusable, else None.
@@ -506,16 +574,32 @@ class OpenCVFaceEngine:
         carry the best guess for logging, and ``reason`` a user-facing message.
         Only ``status == "match"`` may create attendance.
         """
+        query, early = self._query(image)
+        if early is not None:
+            return early
+        return self._rank(query, candidates)
+
+    def _query(self, image):
+        """Detect, quality-gate and embed ``image``.
+
+        Returns ``(vector, None)``, or ``(None, verdict)`` when the frame cannot
+        be used (no face, or a quality problem the person can fix).
+        """
         verdict = {"label": None, "distance": None, "second": None, "reason": None}
         crop = self._largest(image)
         if crop is None:
-            return {**verdict, "status": "no_face", "reason": "No face detected."}
+            return None, {**verdict, "status": "no_face", "reason": "No face detected."}
         reason = self._quality(image, crop)
         if reason:
-            return {**verdict, "status": "low_quality", "reason": reason}
+            return None, {**verdict, "status": "low_quality", "reason": reason}
         query = self._embed(image, crop)
         if query is None:
-            return {**verdict, "status": "no_face", "reason": "No face detected."}
+            return None, {**verdict, "status": "no_face", "reason": "No face detected."}
+        return query, None
+
+    def _rank(self, query, candidates: list[int] | None = None) -> dict:
+        """Compare an embedding with the gallery and apply threshold + margin."""
+        verdict = {"label": None, "distance": None, "second": None, "reason": None}
         gallery = self._get_gallery()
         if not gallery:
             return {**verdict, "status": "unknown", "reason": "No templates enrolled."}
@@ -598,7 +682,11 @@ class OpenCVFaceEngine:
                 "status": "suspect",
                 "reason": "Motion wasn't detected — please move slightly and try again.",
             }
-        results = [self.examine(frame, candidates) for frame in frames]
+        prepared = [self._query(frame) for frame in frames]
+        results = [
+            early if early is not None else self._rank(vector, candidates)
+            for vector, early in prepared
+        ]
         usable = [r for r in results if r["status"] in ("match", "unknown")]
         votes: dict[int, list[float]] = {}
         for result in results:
@@ -621,6 +709,9 @@ class OpenCVFaceEngine:
                 len(winner_dists), len(usable), winner, needed,
             )
             return {"status": "match", "label": winner, "distance": min(winner_dists), "second": None, "reason": None}
+        fused = self._fuse(prepared, votes, candidates)
+        if fused is not None:
+            return fused
         if usable:
             log.info(
                 "multi-frame decision: no consensus across %d usable frames (needed %d)",
@@ -631,6 +722,35 @@ class OpenCVFaceEngine:
         if low_quality is not None:
             return low_quality
         return {**verdict, "status": "no_face", "reason": "No face detected."}
+
+    def _fuse(self, prepared, votes, candidates) -> dict | None:
+        """Rescue a burst with no majority by averaging its frame embeddings.
+
+        Averaging cancels frame-to-frame noise (blink, head turn, compression),
+        so a person whose individual frames each narrowly miss can still be
+        recognised. It stays strict: at least two usable frames, the *same*
+        threshold and runner-up margin as a single scan, and no frame may have
+        matched a different person. Returns a ``match`` verdict, else ``None``.
+        """
+        if not self.fuse_frames:
+            return None
+        vectors = [vector for vector, early in prepared if early is None]
+        if len(vectors) < 2:
+            return None
+        mean = np.mean(vectors, axis=0)
+        norm = float(np.linalg.norm(mean))
+        if not norm:
+            return None
+        verdict = self._rank((mean / norm).astype(np.float32), candidates)
+        if verdict["status"] != "match":
+            return None
+        if any(label != verdict["label"] for label in votes):
+            return None
+        log.info(
+            "multi-frame decision: fused %d frame embeddings -> label=%s distance=%.4f",
+            len(vectors), verdict["label"], verdict["distance"],
+        )
+        return verdict
 
     def recognize(self, image, candidates: list[int] | None = None) -> tuple[int, float] | None:
         outcome = self.examine(image, candidates)
