@@ -23,21 +23,27 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
+import logging
+
 from backend import attendance, backup_sync, database as db, excel_sync, onedrive, scheduler, security
-from backend import seed_data
+from backend import phone_checkin, seed_data
 from backend.attendance import AttendanceError
 from backend.face_recognition import engine
-from backend.limits import client_identity, login_limiter, scan_limiter
+from backend.limits import client_identity, login_limiter, phone_limiter, scan_limiter
 from backend.store import store
 from backend.security import (
     SESSION_COOKIE,
     admin_password_matches,
     create_session,
+    decrypt_bytes,
     public_attendance,
     public_employee,
+    public_snapshot,
     security_status,
     verify_session,
 )
+
+log = logging.getLogger("api")
 
 FRONTEND_DIST = BASE_DIR / "frontend" / "dist"
 DATA_DIR = BASE_DIR / "data"
@@ -114,6 +120,11 @@ class ScanRequest(BaseModel):
             if total > 9_000_000:
                 raise ValueError("Scan burst too large.")
         return payloads
+
+
+class PhoneCheckinRequest(BaseModel):
+    phone: str = Field(min_length=1, max_length=32)
+    image: str | None = Field(None, max_length=4_000_000)  # base64 snapshot from the kiosk camera
 
 
 class ManualRequest(BaseModel):
@@ -203,6 +214,7 @@ def health():
         "status": "ok",
         "face_engine": engine.name,
         "face_detector": getattr(engine, "detector_name", None),
+        "phone_fallback": phone_checkin.enabled(),
         "database": "postgres" if db.using_postgres() else "sqlite",
         **security_status(),
     }
@@ -546,18 +558,96 @@ def scan_attendance(body: ScanRequest, request: Request):
         result = attendance.record_scan(employee_id, source="face")
         return result
     except AttendanceError as exc:
-        if exc.code == "buffer_active":
-            # One check-in at a time: tell the kiosk exactly how long to wait.
-            return JSONResponse(
-                {"action": "WAIT", "message": exc.message, **exc.info},
-                status_code=429,
-                headers={"Retry-After": str(exc.info.get("retry_after", 1))},
-            )
-        status_code = 409 if exc.code == "duplicate_scan" else 422
+        return _attendance_error_response(exc)
+
+
+def _attendance_error_response(exc: AttendanceError) -> JSONResponse:
+    """Translate a business-rule refusal into the kiosk's JSON contract."""
+    if exc.code == "buffer_active":
+        # One check-in at a time: tell the kiosk exactly how long to wait.
         return JSONResponse(
-            {"action": exc.code.upper(), "message": exc.message, **exc.info},
-            status_code=status_code,
+            {"action": "WAIT", "message": exc.message, **exc.info},
+            status_code=429,
+            headers={"Retry-After": str(exc.info.get("retry_after", 1))},
         )
+    status_code = 409 if exc.code == "duplicate_scan" else 422
+    return JSONResponse(
+        {"action": exc.code.upper(), "message": exc.message, **exc.info},
+        status_code=status_code,
+    )
+
+
+@app.post("/api/attendance/phone")
+def phone_attendance(body: PhoneCheckinRequest, request: Request):
+    """Check in / out with a registered phone number when the face scan fails.
+
+    Same rules as a face scan, recorded with ``source="phone"``. The camera
+    snapshot is validated first (so nothing is recorded without the evidence
+    the kiosk promised) and stored encrypted only once attendance succeeds.
+    """
+    if not phone_checkin.enabled():
+        return JSONResponse(
+            {"action": "UNKNOWN", "message": "Phone check-in is turned off. Ask an administrator."},
+            status_code=403,
+        )
+    client = client_identity(request)
+    allowed, retry_after = phone_limiter.check(client)
+    if not allowed:
+        return JSONResponse(
+            {"action": "RATE_LIMITED", "message": "Too many attempts. Please wait a moment."},
+            status_code=429,
+            headers={"Retry-After": str(retry_after)},
+        )
+
+    snapshot = None
+    try:
+        if body.image:
+            snapshot = phone_checkin.prepare_snapshot(body.image)
+        elif phone_checkin.snapshot_required():
+            return JSONResponse(
+                {"action": "SNAPSHOT_REQUIRED", "message": "The camera must be on so a snapshot can be taken."},
+                status_code=400,
+            )
+        employee = phone_checkin.find_employee(body.phone)
+    except phone_checkin.PhoneError as exc:
+        return JSONResponse({"action": "UNKNOWN", "message": exc.message}, status_code=exc.status)
+
+    try:
+        result = attendance.record_scan(employee["id"], source="phone")
+    except AttendanceError as exc:
+        return _attendance_error_response(exc)
+
+    if snapshot is not None:
+        try:
+            phone_checkin.save_snapshot(employee["id"], *snapshot)
+        except Exception:  # never undo a recorded check-in over the evidence photo
+            log.exception("Could not store the phone check-in snapshot for %s.", employee["id"])
+    return {**result, "method": "phone"}
+
+
+@app.get("/api/attendance/snapshots")
+def list_snapshots(
+    date: str | None = Query(None),
+    employee_id: str | None = None,
+    _: bool = Depends(require_admin),
+):
+    """Phone check-in snapshots for a day (metadata only), for admin review."""
+    return [public_snapshot(row) for row in store.snapshots_by_date(date or db.today_str(), employee_id)]
+
+
+@app.get("/api/attendance/snapshots/{snapshot_id}/image")
+def snapshot_image(snapshot_id: int, _: bool = Depends(require_admin)):
+    row = store.get_snapshot(snapshot_id)
+    if row is None:
+        raise HTTPException(404, "Snapshot not found.")
+    image = row["image"]
+    if isinstance(image, memoryview):
+        image = image.tobytes()
+    return Response(
+        content=decrypt_bytes(bytes(image)),
+        media_type="image/jpeg",
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @app.post("/api/attendance/manual")

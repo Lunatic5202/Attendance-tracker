@@ -227,6 +227,45 @@ Improvements that never touch stored templates:
  default for a site. The model ships in the Docker image next to SFace.
 * **Sample counts** — the employee list shows how many stored samples each
  person has, so an admin can tell at a glance who needs another enrollment.
+* **Detection recovery** — a frame where no face is found is retried, cheapest
+ first: on an enlarged copy (small / distant faces), then on a contrast- and
+ brightness-lifted copy (dim or backlit rooms). The lift is used for *finding*
+ the face only; the embedding is still cut from the untouched pixels, so every
+ stored template stays valid. Disable with `FACE_ENHANCE_RETRY=0`.
+* **Nearest-face selection** — with several faces in view, boxes scoring within
+ `FACE_PICK_RATIO` (default `0.75`) of the best compete on size, so the person
+ at the kiosk beats a confident-but-distant bystander. Faces cut off by the
+ frame edge are clipped (they used to crash the crop) or rejected when over a
+ third is missing.
+* **Burst fusion** — when a 3-frame burst has no majority, the frame embeddings
+ are averaged and judged by the *same* threshold and margin as a single scan.
+ It never overrides a frame that matched someone else. Disable with
+ `FACE_FUSE_FRAMES=0`.
+
+### Phone-number fallback
+
+For anyone whose face will not scan, the kiosk has a **"Can't scan? Use your
+phone number"** panel under the camera. The person types the number on their
+profile; the kiosk takes a snapshot from the live camera; attendance is then
+recorded by the normal check-in / check-out rules (source `phone`) and the same
+welcome dialog appears.
+
+A number is weaker proof than a face, so the fallback leaves a trail and is
+rate-limited on its own:
+
+* the snapshot is stored **encrypted** and shown to admins as a `photo` link on
+ the Attendance page (flagged `no face` when none was visible in it);
+* snapshots are deleted after `PHONE_SNAPSHOT_DAYS` (default `30`, `0` = keep);
+* nothing is recorded if the snapshot is missing or unreadable (set
+ `PHONE_FALLBACK_REQUIRE_SNAPSHOT=0` to allow check-in with a dead camera);
+* unknown, inactive and invalid numbers all get the same wording, and a number
+ shared by two people is refused rather than guessed;
+* `PHONE_RATE_LIMIT` / `PHONE_RATE_WINDOW` (default 6 per 60 s per client);
+* `PHONE_FALLBACK_ENABLED=0` switches it off and hides the button.
+
+Numbers match on their last ten digits, so `+91 98300 12345` and `9830012345`
+are the same number. Enter phone numbers on each employee's profile for the
+fallback to work.
 
 ### Database
 

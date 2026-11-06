@@ -27,6 +27,8 @@ Contract (:class:`Store`)
 * ``attendance_entry(emp_id, date)`` - day record joined with employee fields.
 * ``attendance_by_date(date)``, ``attendance_by_employee(emp_id, limit)`` - joined lists.
 * ``attendance_date_rows(date)``  - raw day rows for summaries.
+* ``insert_snapshot(record)``, ``snapshots_by_date(date, emp_id)``, ``get_snapshot(id)``,
+  ``purge_snapshots(before_date)`` - encrypted phone check-in snapshots.
 """
 
 from __future__ import annotations
@@ -279,6 +281,44 @@ def _attendance_date_rows(conn, date: str) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def _insert_snapshot(conn, record: dict) -> None:
+    conn.execute(
+        """
+        INSERT INTO attendance_snapshots
+            (employee_id, date, taken_at, source, face_detected, image, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            record["employee_id"], record["date"], record["taken_at"],
+            record.get("source", "phone"), record.get("face_detected"),
+            record["image"], record["created_at"],
+        ),
+    )
+
+
+def _snapshots_by_date(conn, date: str, employee_id: str | None = None) -> list[dict]:
+    """Snapshot metadata for a day (image column left out), oldest first."""
+    sql = (
+        "SELECT id, employee_id, date, taken_at, source, face_detected, created_at "
+        "FROM attendance_snapshots WHERE date = ?"
+    )
+    params: list = [date]
+    if employee_id:
+        sql += " AND employee_id = ?"
+        params.append(employee_id)
+    rows = conn.execute(sql + " ORDER BY id", params).fetchall()
+    return [dict(r) for r in rows]
+
+
+def _get_snapshot(conn, snapshot_id: int) -> dict | None:
+    row = conn.execute("SELECT * FROM attendance_snapshots WHERE id = ?", (snapshot_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def _purge_snapshots(conn, before_date: str) -> None:
+    conn.execute("DELETE FROM attendance_snapshots WHERE date < ?", (before_date,))
+
+
 class SQLiteSession:
     """A single-connection unit of work that commits on clean exit."""
 
@@ -431,6 +471,22 @@ class SQLiteStore(Store):
     def field_visits_all(self, limit: int = 5000) -> list[dict]:
         with db.get_conn() as conn:
             return _field_visits_all(conn, limit)
+
+    def insert_snapshot(self, record: dict) -> None:
+        with db.get_conn() as conn:
+            _insert_snapshot(conn, record)
+
+    def snapshots_by_date(self, date: str, employee_id: str | None = None) -> list[dict]:
+        with db.get_conn() as conn:
+            return _snapshots_by_date(conn, date, employee_id)
+
+    def get_snapshot(self, snapshot_id: int) -> dict | None:
+        with db.get_conn() as conn:
+            return _get_snapshot(conn, snapshot_id)
+
+    def purge_snapshots(self, before_date: str) -> None:
+        with db.get_conn() as conn:
+            _purge_snapshots(conn, before_date)
 
 
 store: Store = SQLiteStore()

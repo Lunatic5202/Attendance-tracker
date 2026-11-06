@@ -83,6 +83,13 @@ scan_limiter = RateLimiter(
     window_seconds=_env_int("SCAN_RATE_WINDOW", 60),
 )
 
+#: The phone-number fallback is a weaker check than a face, so it gets its own,
+#: tighter budget; it also slows anyone trying numbers one after another.
+phone_limiter = RateLimiter(
+    limit=_env_int("PHONE_RATE_LIMIT", 6),
+    window_seconds=_env_int("PHONE_RATE_WINDOW", 60),
+)
+
 login_limiter = RateLimiter(
     limit=_env_int("LOGIN_RATE_LIMIT", 5),
     window_seconds=_env_int("LOGIN_RATE_WINDOW", 60),

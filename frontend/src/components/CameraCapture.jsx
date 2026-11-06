@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react'
+import React, { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react'
 
 export function captureDataURL(video) {
   const canvas = document.createElement('canvas')
@@ -56,7 +56,7 @@ function waitForVideoFrame(video, isCancelled) {
   })
 }
 
-export default function CameraCapture({
+const CameraCapture = forwardRef(function CameraCapture({
   active = true,
   onFrame,
   mirror = true,
@@ -66,11 +66,20 @@ export default function CameraCapture({
   onError,
   burst = 1,
   onBurst,
-}) {
+}, ref) {
   const videoRef = useRef(null)
   const [error, setError] = useState(null)
   const [ready, setReady] = useState(false)
   const [retryKey, setRetryKey] = useState(0)
+
+  // Lets a parent take a one-off snapshot (e.g. the phone-number fallback);
+  // returns null until the camera is actually delivering frames.
+  useImperativeHandle(ref, () => ({
+    capture: () => {
+      const v = videoRef.current
+      return v && v.readyState >= 2 && v.videoWidth > 0 ? captureDataURL(v) : null
+    },
+  }), [])
 
   useEffect(() => {
     if (!active) {
@@ -274,4 +283,6 @@ export default function CameraCapture({
       )}
     </div>
   )
-}
+})
+
+export default CameraCapture

@@ -123,6 +123,17 @@ def public_visit(row: Any) -> dict:
     return data
 
 
+def public_snapshot(row: Any) -> dict:
+    """Metadata of a phone check-in snapshot; the image itself is never inlined."""
+    data = dict(row)
+    data.pop("image", None)
+    data["taken_at"] = decrypt_text(data.get("taken_at"))
+    data["created_at"] = decrypt_text(data.get("created_at"))
+    detected = data.get("face_detected")
+    data["face_detected"] = None if detected is None else bool(detected)
+    return data
+
+
 def admin_password_matches(password: str) -> bool:
     configured = os.getenv("ADMIN_PASSWORD", "").strip()
     if not configured:
