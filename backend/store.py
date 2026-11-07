@@ -169,6 +169,13 @@ def _close_attendance(conn, row_id: int, check_out: str, hours: float) -> None:
     )
 
 
+def _set_attendance_sessions(conn, row_id: int, sessions: str, check_out: str | None, hours: float) -> None:
+    conn.execute(
+        "UPDATE attendance SET sessions = ?, check_out = ?, hours = ? WHERE id = ?",
+        (sessions, check_out, hours, row_id),
+    )
+
+
 def _attendance_entry(conn, employee_id: str, date: str) -> dict | None:
     row = conn.execute(
         """
@@ -355,6 +362,9 @@ class SQLiteSession:
     def close_attendance(self, row_id: int, check_out: str, hours: float) -> None:
         _close_attendance(self._conn, row_id, check_out, hours)
 
+    def set_attendance_sessions(self, row_id: int, sessions: str, check_out: str | None, hours: float) -> None:
+        _set_attendance_sessions(self._conn, row_id, sessions, check_out, hours)
+
     def insert_field_visit(self, record: dict) -> None:
         _insert_field_visit(self._conn, record)
 
@@ -435,6 +445,10 @@ class SQLiteStore(Store):
     def close_attendance(self, row_id: int, check_out: str, hours: float) -> None:
         with db.get_conn() as conn:
             _close_attendance(conn, row_id, check_out, hours)
+
+    def set_attendance_sessions(self, row_id: int, sessions: str, check_out: str | None, hours: float) -> None:
+        with db.get_conn() as conn:
+            _set_attendance_sessions(conn, row_id, sessions, check_out, hours)
 
     def attendance_entry(self, employee_id: str, date: str) -> dict | None:
         with db.get_conn() as conn:
