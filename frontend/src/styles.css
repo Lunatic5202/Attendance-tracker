@@ -1115,3 +1115,20 @@ input[type="checkbox"] {
   .key{min-height:78px;font-size:1.9rem}
   .big-back{width:100%;margin-top:1rem}
 }
+
+
+/* ---- Explicit Check In / Check Out buttons (kiosk records only on a press) ---- */
+.intent-row{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.9rem;margin-top:.9rem}
+.intent-btn{display:grid;justify-items:center;align-content:center;gap:.1rem;min-height:112px;padding:.9rem .8rem;font-family:var(--font-display);color:var(--white);border:3px solid transparent;border-radius:16px;box-shadow:0 14px 28px -20px rgba(16,43,70,.8);cursor:pointer;touch-action:manipulation;user-select:none;transition:transform .12s var(--ease-out),filter .12s var(--ease-out),box-shadow .12s var(--ease-out)}
+.intent-btn.in{background:var(--ok);border-color:var(--ok)}
+.intent-btn.out{background:var(--bolt);border-color:var(--bolt)}
+.intent-btn:hover:not(:disabled){filter:brightness(.93)}
+.intent-btn:active:not(:disabled){transform:scale(.97)}
+.intent-btn:disabled{opacity:.55;cursor:wait}
+.intent-btn:focus-visible{outline:4px solid var(--navy-deep);outline-offset:3px}
+.ib-icon{font-size:1.9rem;line-height:1;font-weight:700}
+.ib-label{font-size:1.6rem;font-weight:800;letter-spacing:.02em}
+.ib-hint{font-size:1rem;opacity:.92}
+.kiosk-standby{cursor:pointer}
+.phone-pad .intent-row{margin-top:.2rem}
+@media (max-width: 420px){.intent-row{grid-template-columns:1fr}.intent-btn{min-height:96px}}

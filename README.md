@@ -15,12 +15,9 @@ Instead of manually entering attendance, employees simply stand in front of a ca
 * **SFace recognition**
 
  * Deep 128-dimensional face embeddings matched by cosine distance, instead of the older LBPH histogram model. Robust to lighting and much better at telling similar-looking people apart.
-* **Automatic Check-In**
+* **Press-to-record Check-In / Check-Out**
 
- * First successful scan of the day records the employee's check-in time.
-* **Automatic Check-Out**
-
- * A later scan records the employee's check-out time.
+ * The kiosk never records on its own. The person looks at the camera and presses a large **Check In** or **Check Out** button; only then is the scan sent and recorded. A mismatch (checking out before checking in, or checking in twice) is refused with a plain message.
 * **Working Hours Calculation**
 
  * Automatically calculates the employee's total working duration.
@@ -48,9 +45,9 @@ Instead of manually entering attendance, employees simply stand in front of a ca
 * **Duplicate Scan Protection**
 
  * Prevents accidental repeated check-ins/check-outs.
-* **Check-Out Buffer**
+* **Optional Check-Out Minimum**
 
- * A check-out scan is rejected until a minimum work buffer (default 4 hours, `MIN_CHECKOUT_HOURS`) has passed since check-in. Enforced on the server, not just the UI.
+ * No minimum by default, so staff on site visits can check out whenever they leave. Set `MIN_CHECKOUT_HOURS` above 0 to require a minimum time after check-in; it is enforced on the server.
 * **Secure Kiosk + Admin Console**
 
  * Employees use the public kiosk with their face and **no accounts or passwords**. All employee data, logs, and face enrollment live behind a password-protected administrator console.
@@ -249,8 +246,8 @@ For anyone whose face will not scan, the Live Scan page has a large
 It opens the dedicated **Phone Check-In** tab (`#/phone`, also in the sidebar).
 The tab is built for non-technical users: a big on-screen keypad, a large
 number display, and one big green **Check In / Check Out** button. The person
-types the number on their profile; the kiosk takes a snapshot from the live
-camera; attendance is then recorded by the normal check-in / check-out rules
+types the number on their profile, then presses **Check In** or **Check Out**;
+the kiosk takes a snapshot from the live camera and attendance is recorded
 (source `phone`), a large welcome dialog appears, and the kiosk returns to the
 face scan on its own (also after 90 s of inactivity).
 
@@ -478,7 +475,7 @@ The tracker has exactly two experiences, so nothing depends on employees remembe
 
  * `ADMIN_PASSWORD` — choose a strong random value. This is the **only** password in the system; keep it with the company owner(s), not printed in the office.
  * `ATTENDANCE_MASTER_KEY` — generate one with `python -c "import secrets; print(secrets.token_urlsafe(48))"`. It encrypts all employee data and face templates at rest. Back it up; losing it makes encrypted data unrecoverable.
- * `MIN_CHECKOUT_HOURS` — the minimum time between check-in and check-out (the work buffer). Default `4`.
+ * `MIN_CHECKOUT_HOURS` — optional minimum time between check-in and check-out. Default `0` (no minimum), so site visits are not blocked.
  * `ALLOWED_ORIGINS` — the exact browser origin (your kiosk/server hostname). Never `*`.
  * `ENVIRONMENT=production` to enable secure cookies.
 

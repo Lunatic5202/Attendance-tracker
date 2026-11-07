@@ -190,7 +190,8 @@ class PhoneCheckinTests(unittest.TestCase):
         emp_id, phone = self._employee()
         self.assertEqual(self._checkin(phone).status_code, 200)
         reset_buffer()
-        res = self._checkin(phone)
+        with patch("backend.attendance.MIN_CHECKOUT_HOURS", 4.0):  # minimum is opt-in
+            res = self._checkin(phone)
         self.assertEqual(res.status_code, 422)
         self.assertEqual(res.json()["action"], "CHECKOUT_TOO_EARLY")
         self.assertEqual(len(self._snapshots(emp_id)), 1, "a refused attempt must not store a snapshot")

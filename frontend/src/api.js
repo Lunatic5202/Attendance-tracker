@@ -60,13 +60,14 @@ export const api = {
   },
 
   // Accepts a single frame or a burst; the backend votes across frames.
-  scan: (images, employeeId) => {
+  // `action` is what the person chose: 'check-in' or 'check-out'.
+  scan: (images, employeeId, action) => {
     const frames = Array.isArray(images) ? images : [images]
-    return req('/attendance/scan', { method: 'POST', body: JSON.stringify({ images: frames, employee_id: employeeId }) })
+    return req('/attendance/scan', { method: 'POST', body: JSON.stringify({ images: frames, employee_id: employeeId, action }) })
   },
   // Fallback for people whose face cannot be scanned: registered number + camera snapshot.
-  phoneCheckin: (phone, image) =>
-    req('/attendance/phone', { method: 'POST', body: JSON.stringify({ phone, image }) }),
+  phoneCheckin: (phone, image, action) =>
+    req('/attendance/phone', { method: 'POST', body: JSON.stringify({ phone, image, action }) }),
   // Admin: metadata of phone check-in snapshots (images load from /api/attendance/snapshots/:id/image).
   snapshots: (date, employeeId) => {
     const q = new URLSearchParams()

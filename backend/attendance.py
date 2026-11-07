@@ -4,6 +4,12 @@ Rules:
   * Office staff, first successful scan of the day   -> CHECK-IN
   * Office staff, second successful scan of the day  -> CHECK-OUT + working hours
   * Office staff, any further scan the same day      -> rejected (duplicate protection)
+  * The kiosk now says which one the person means (``intent``): "check-in" or
+    "check-out". A mismatch (checking out before checking in, or checking in
+    twice) is refused with a plain message instead of being guessed.
+  * There is no minimum time between check-in and check-out by default, so
+    people called out to site visits can check out whenever they leave. Set
+    ``MIN_CHECKOUT_HOURS`` above 0 to bring the minimum back.
   * Check-ins after the late threshold describe the employee as LATE
   * Field staff (delivery / ground crew) have no shift: every successful scan
     records a single VISIT. No check-out, no hours, no late rule, and no
@@ -24,7 +30,8 @@ from backend.store import store
 log = logging.getLogger("attendance")
 
 DEFAULT_LATE_AT = os.getenv("LATE_AT", "09:30")
-MIN_CHECKOUT_HOURS = float(os.getenv("MIN_CHECKOUT_HOURS", "4"))
+#: Minimum hours between check-in and check-out. 0 (default) means no minimum.
+MIN_CHECKOUT_HOURS = float(os.getenv("MIN_CHECKOUT_HOURS", "0"))
 CHECKIN_BUFFER_SECONDS = float(os.getenv("CHECKIN_BUFFER_SECONDS", "8"))
 
 OFFICE = "office"
@@ -54,6 +61,20 @@ def normalise_category(value: str | None) -> str:
     if any(word in text for word in ("field", "ground", "crew", "delivery", "driver", "rider")):
         return FIELD
     return OFFICE
+
+
+CHECK_IN = "check-in"
+CHECK_OUT = "check-out"
+
+
+def normalise_intent(value: str | None) -> str | None:
+    """Return ``"check-in"`` / ``"check-out"``, or ``None`` for the old auto toggle."""
+    text = str(value or "").strip().lower().replace("_", "-")
+    if text in ("check-in", "checkin", "in"):
+        return CHECK_IN
+    if text in ("check-out", "checkout", "out"):
+        return CHECK_OUT
+    return None
 
 
 def _buffer_remaining() -> int:
@@ -117,17 +138,33 @@ def _format_hours(hours: float) -> str:
     return f"{h}h {m:02d}m"
 
 
-def record_scan(employee_id: str, source: str = "face", late_at: str = DEFAULT_LATE_AT) -> dict:
-    """Apply the auto check-in / check-out rule for one recognised employee.
+def record_scan(
+    employee_id: str,
+    source: str = "face",
+    late_at: str = DEFAULT_LATE_AT,
+    intent: str | None = None,
+) -> dict:
+    """Record one check-in / check-out for a recognised employee.
+
+    ``intent`` is what the person chose on the kiosk (``"check-in"`` or
+    ``"check-out"``). Without it the old rule applies: first scan checks in,
+    the next one checks out.
 
     Field staff are routed to :func:`record_visit` instead: one row per scan,
     no check-out and no working-hours maths.
     """
+    intent = normalise_intent(intent)
     with store.session() as s:
         emp = s.get_active_employee(employee_id)
         if emp is None:
             raise AttendanceError("unknown_employee", "No active employee with that id.")
         if is_field(emp):
+            if intent == CHECK_OUT:
+                raise AttendanceError(
+                    "field_no_checkout",
+                    "Field staff don't check out. Press Check In to log a visit.",
+                    employee=public_employee(emp),
+                )
             return _record_visit(s, emp, source)
 
         date, now = db.today_str(), db.now_str()
@@ -135,6 +172,13 @@ def record_scan(employee_id: str, source: str = "face", late_at: str = DEFAULT_L
         public = public_employee(emp)
 
         if row is None:
+            if intent == CHECK_OUT:
+                raise AttendanceError(
+                    "not_checked_in",
+                    "You have not checked in today, so there is nothing to check out. Press Check In first.",
+                    employee_id=employee_id,
+                    employee=public,
+                )
             _guard_buffer()
             status = "Late" if _is_late(now, late_at) else "Present"
             s.insert_attendance(
@@ -153,8 +197,16 @@ def record_scan(employee_id: str, source: str = "face", late_at: str = DEFAULT_L
             action = "CHECK-IN"
         elif row["check_out"] is None:
             check_in = decrypt_text(row["check_in"])
+            if intent == CHECK_IN:
+                raise AttendanceError(
+                    "already_checked_in",
+                    "You are already checked in today. Press Check Out when you leave.",
+                    employee_id=employee_id,
+                    employee=public,
+                    check_in=check_in[:5],
+                )
             seconds = (_parse_time(now) - _parse_time(check_in)).total_seconds()
-            if seconds < MIN_CHECKOUT_HOURS * 3600:
+            if MIN_CHECKOUT_HOURS > 0 and seconds < MIN_CHECKOUT_HOURS * 3600:
                 remaining = max(1, int((MIN_CHECKOUT_HOURS * 3600 - seconds + 59) // 60))
                 unlocks_at = (_parse_time(check_in) + timedelta(hours=MIN_CHECKOUT_HOURS)).strftime("%H:%M")
                 raise AttendanceError(
