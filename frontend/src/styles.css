@@ -1132,3 +1132,139 @@ input[type="checkbox"] {
 .kiosk-standby{cursor:pointer}
 .phone-pad .intent-row{margin-top:.2rem}
 @media (max-width: 420px){.intent-row{grid-template-columns:1fr}.intent-btn{min-height:96px}}
+
+
+/* Live kiosk viewport fit — keep the existing visual system, only reclaim vertical space. */
+@media (min-width: 901px) {
+  .app:has(.scan-page) {
+    height: 100dvh;
+    min-height: 0;
+    overflow: hidden;
+  }
+  .app:has(.scan-page) .shell {
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+  .app:has(.scan-page) .content {
+    min-height: 0;
+    overflow: hidden;
+    padding: clamp(.7rem, 1.35vh, 1.25rem) clamp(1rem, 2vw, 2rem);
+  }
+  .scan-page {
+    height: 100%;
+    max-width: none;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+  .scan-page .page-head {
+    flex: none;
+    margin-bottom: .7rem;
+  }
+  .scan-page .page-head h1 {
+    font-size: clamp(1.7rem, 2.7vw, 2.45rem);
+  }
+  .scan-page .page-head .sub {
+    margin-top: .3rem;
+    font-size: .64rem;
+    line-height: 1.45;
+  }
+  .scan-page .scan-grid {
+    flex: 1 1 auto;
+    min-height: 0;
+    grid-template-columns: minmax(0, 1.3fr) minmax(290px, .7fr);
+    gap: .9rem;
+  }
+  .scan-page .cam-col,
+  .scan-page .result-panel {
+    min-height: 0;
+  }
+  .scan-page .cam-col {
+    display: flex;
+    flex-direction: column;
+  }
+  .scan-page .camera {
+    flex: 1 1 auto;
+    min-height: 180px;
+    height: auto;
+    aspect-ratio: auto;
+  }
+  .scan-page .cam-caption {
+    flex: none;
+    padding: .55rem .8rem;
+  }
+  .scan-page .phone-fallback {
+    flex: none;
+    margin-top: .55rem;
+  }
+  .scan-page .phone-fallback .phone-toggle {
+    min-height: 58px;
+    padding: .55rem .9rem;
+    font-size: .95rem;
+  }
+  .scan-page .phone-fallback .pt-icon {
+    width: 40px;
+    height: 40px;
+    font-size: 1.3rem;
+  }
+  .scan-page .phone-fallback .pt-text b { font-size: 1rem; }
+  .scan-page .phone-fallback .pt-text span { font-size: .78rem; }
+  .scan-page .result-panel {
+    overflow: hidden;
+  }
+  .scan-page .result-card {
+    flex: none;
+    min-height: 0;
+  }
+  .scan-page .result-log {
+    flex: 1 1 auto;
+    min-height: 90px;
+    max-height: none;
+    overflow: auto;
+    margin-top: .7rem;
+  }
+  .scan-page .kiosk-note {
+    flex: none;
+    gap: .6rem;
+    padding: .6rem .85rem;
+  }
+  .app:has(.scan-page) .page-foot {
+    flex: none;
+    padding-top: .55rem;
+    padding-bottom: .55rem;
+  }
+  .app:has(.scan-page) .foot-inner > div:first-child {
+    display: flex;
+    align-items: center;
+    gap: .6rem;
+  }
+  .app:has(.scan-page) .page-foot .logo-mark {
+    width: 30px;
+    height: 30px;
+  }
+  .app:has(.scan-page) .page-foot .logo-type {
+    margin-top: 0 !important;
+  }
+  .app:has(.scan-page) .page-foot .logo-type span {
+    font-size: .48rem;
+  }
+  .app:has(.scan-page) .foot-inner > .mono {
+    font-size: .54rem !important;
+    line-height: 1.45 !important;
+  }
+}
+
+@media (max-width: 900px) {
+  .app:has(.scan-page) {
+    height: auto;
+    min-height: 100dvh;
+    overflow: visible;
+  }
+  .app:has(.scan-page) .content {
+    overflow: visible;
+  }
+  .scan-page {
+    height: auto;
+    min-height: 0;
+  }
+}
