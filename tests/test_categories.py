@@ -272,6 +272,10 @@ class ExplicitIntentTests(CategoryTestCase):
         self.assertEqual(prompt["action"], "DETECTED")
         self.assertEqual(prompt["suggested_action"], "check-in")
         self.assertEqual(attendance.get_by_date(TODAY), [])
+        self._scan(emp, "check-in", "09:00:00")
+        with patch.object(db, "today_str", return_value=TODAY):
+            prompt = attendance.scan_prompt(emp)
+        self.assertEqual(prompt["suggested_action"], "check-out")
 
     def test_field_staff_log_visits_with_check_in_and_cannot_check_out(self):
         emp = add_employee("FLD301", "Omar Khan", "field")
