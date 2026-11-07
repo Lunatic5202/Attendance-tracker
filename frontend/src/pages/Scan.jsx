@@ -24,6 +24,8 @@ const actions = {
 const star = () => new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true })
 
 const IDLE_SLEEP_MS = 30 * 1000
+const PROMPT_MS = 20 * 1000
+const CONFIRM_MS = 5200
 
 export default function Scan() {
   const [scanning, setScanning] = useState(true)
@@ -44,6 +46,7 @@ export default function Scan() {
   const blockedEmployeeRef = useRef(null)
   const noFaceStreakRef = useRef(0)
   const confirmationTimer = useRef(null)
+  const promptTimer = useRef(null)
   const audioContextRef = useRef(null)
   const logBox = useRef(null)
   const asleepRef = useRef(false)
@@ -82,11 +85,43 @@ export default function Scan() {
 
   useEffect(() => () => {
     clearTimeout(confirmationTimer.current)
+    clearTimeout(promptTimer.current)
     audioContextRef.current?.close().catch(() => {})
   }, [])
 
   const pushLog = (t, s, tone = '') =>
     setLog((cur) => [...cur.slice(-29), { t, s, tone }])
+
+  // The recognition prompt waits for a button, but not forever: it expires so a
+  // kiosk left alone returns to idle, and the same face is not re-prompted
+  // until it has left the frame.
+  const clearPrompt = () => {
+    clearTimeout(promptTimer.current)
+    detectedRef.current = null
+    pendingFramesRef.current = null
+    setDetected(null)
+  }
+
+  const dismissPrompt = (why) => {
+    const id = detectedRef.current?.employee?.id
+    if (id) blockedEmployeeRef.current = id
+    clearPrompt()
+    if (why) pushLog('VERIFY', why, 'err-line')
+  }
+
+  const showPrompt = (result) => {
+    const same = detectedRef.current?.employee?.id === result.employee?.id
+    detectedRef.current = result
+    setDetected(result)
+    if (!same) {
+      clearTimeout(promptTimer.current)
+      const expire = () => {
+        if (lock.current) { promptTimer.current = setTimeout(expire, 1500); return }
+        dismissPrompt('prompt timed out — step away and back to retry')
+      }
+      promptTimer.current = setTimeout(expire, PROMPT_MS)
+    }
+  }
 
   // Recognition only: hold the detected employee on screen until they choose an action.
   // A completed employee stays blocked until the camera sees them leave the frame.
@@ -100,21 +135,16 @@ export default function Scan() {
         const employeeId = result.employee?.id
         if (employeeId && blockedEmployeeRef.current === employeeId) return
         pendingFramesRef.current = frames
-        detectedRef.current = result
-        setDetected(result)
+        showPrompt(result)
         setLast({ action: 'DETECTED', employee: result.employee, message: result.message, time: star() })
       } else {
         if (result.action === 'NO_FACE') {
           noFaceStreakRef.current += 1
           if (noFaceStreakRef.current >= 2) blockedEmployeeRef.current = null
-          detectedRef.current = null
-          pendingFramesRef.current = null
-          setDetected(null)
+          clearPrompt()
         } else if (result.action === 'UNKNOWN' || result.action === 'LOW_QUALITY') {
           noFaceStreakRef.current = 0
-          detectedRef.current = null
-          pendingFramesRef.current = null
-          setDetected(null)
+          clearPrompt()
         }
         handleResult(result)
       }
@@ -126,9 +156,7 @@ export default function Scan() {
       }
       if (result.action === 'UNKNOWN' || result.action === 'LOW_QUALITY' || result.action === 'NO_FACE') {
         if (result.action !== 'NO_FACE') noFaceStreakRef.current = 0
-        detectedRef.current = null
-        pendingFramesRef.current = null
-        setDetected(null)
+        clearPrompt()
       }
       handleResult(result)
     } finally {
@@ -146,9 +174,7 @@ export default function Scan() {
       const result = await api.scan(frames, undefined, action)
       blockedEmployeeRef.current = prompt.employee.id
       noFaceStreakRef.current = 0
-      detectedRef.current = null
-      pendingFramesRef.current = null
-      setDetected(null)
+      clearPrompt()
       handleResult(result)
     } catch (e) {
       const result = e.data || { action: 'UNKNOWN', message: e.message }
@@ -171,6 +197,13 @@ export default function Scan() {
     confirmationRef.current = null
     setConfirmation(null)
   }
+
+  useEffect(() => {
+    if (!confirmation) return undefined
+    const onKey = (e) => { if (e.key === 'Escape') closeConfirmation() }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [confirmation]) // eslint-disable-line react-hooks/exhaustive-deps
 
   function playConfirmationTone(kind, late = false) {
     if (typeof window === 'undefined') return
@@ -214,7 +247,7 @@ export default function Scan() {
     confirmationTimer.current = setTimeout(() => {
       confirmationRef.current = null
       setConfirmation(null)
-    }, 5200)
+    }, CONFIRM_MS)
   }
 
   // The phone-number fallback now lives on its own tab (#/phone).
@@ -249,7 +282,9 @@ export default function Scan() {
         kind: 'check-out',
         employee: res.employee,
         time: now,
-        hours: hrs,
+        hours: res.session_hours_fmt || hrs,
+        total: hrs,
+        sessions: res.session_count || 1,
         phone: opts.phone,
       })
       pushLog('SCAN', `${res.employee?.name} — CHECK-OUT @${now} (${hrs})`, 'ok-line')
@@ -331,10 +366,10 @@ export default function Scan() {
           <div className={`result-card ${meta.cls}`}>
             <div className="rc-top">
               <span className="rc-flag">{meta.label}</span>
-              <span className="rc-time">{last ? fmtTime(last.time) : star()}</span>
+              <span className="rc-time">{last ? last.time : star()}</span>
             </div>
 
-            {last?.employee ? (
+            {detected ? null : last?.employee ? (
               <div className="rc-body">
                 <div className="rc-avatar">{last.employee.name.trim().charAt(0).toUpperCase()}</div>
                 <div className="rc-main">
@@ -357,38 +392,62 @@ export default function Scan() {
               </div>
             )}
 
-            {last?.message && last.action !== 'CHECK-IN' && last.action !== 'CHECK-OUT' && (
+            {!detected && last?.message && last.action !== 'CHECK-IN' && last.action !== 'CHECK-OUT' && (
               <div className="rc-note">{last.message}</div>
             )}
 
-            {detected && (
-              <div className="detected-panel" role="status" aria-live="polite">
-                <div className="detected-kicker"><span className="detected-pulse" /> FACE RECOGNISED</div>
-                <div className="detected-name">{detected.employee.name}</div>
-                <div className="detected-meta mono">{detected.employee.id} / {detected.employee.department} · {detected.employee.role || 'staff'}</div>
-                <p>{detected.employee.category === 'field' ? 'Confirm to log this visit.' : 'What would you like to do?'}</p>
-                <div className="intent-row">
-                  {detected.employee.category === 'field' ? (
-                    <button type="button" className="intent-btn in" disabled={processing} onClick={() => chooseAction('check-in')}>
-                      <span className="ib-label">{processing ? 'PROCESSING…' : 'LOG VISIT'}</span>
-                      <span className="ib-hint">Record arrival</span>
+            {detected && (() => {
+              const emp = detected.employee
+              const field = emp.category === 'field'
+              const suggested = detected.suggested_action
+              const since = detected.checked_in_since
+              const status = field
+                ? 'Field staff — each scan logs one visit'
+                : since ? `Checked in since ${fmtTime(since)}` : 'Not currently checked in'
+              return (
+                <div className="detected-panel" role="status" aria-live="polite">
+                  <div className="detected-top">
+                    <div className="detected-kicker"><span className="detected-pulse" /> FACE RECOGNISED</div>
+                    <button type="button" className="prompt-cancel" disabled={processing} onClick={() => dismissPrompt()}>
+                      Not you?
                     </button>
-                  ) : (
-                    <>
-                      <button type="button" className="intent-btn in" disabled={processing} onClick={() => chooseAction('check-in')}>
-                        <span className="ib-label">{processing ? 'PLEASE WAIT…' : 'CHECK IN'}</span>
-                        <span className="ib-hint">Start a session</span>
+                  </div>
+                  <div className="detected-id">
+                    <div className="detected-avatar" aria-hidden="true">{emp.name.trim().charAt(0).toUpperCase()}</div>
+                    <div className="detected-who">
+                      <div className="detected-name">{emp.name}</div>
+                      <div className="detected-meta mono">{emp.id} / {emp.department} · {emp.role || 'staff'}</div>
+                    </div>
+                  </div>
+                  <div className={`prompt-status ${since ? 'on' : ''}`}>{status}</div>
+                  <div className="intent-row">
+                    {field ? (
+                      <button type="button" className="intent-btn in suggested" disabled={processing} onClick={() => chooseAction('check-in')}>
+                        <span className="ib-label">{processing ? 'PROCESSING…' : 'LOG VISIT'}</span>
+                        <span className="ib-hint">Record arrival</span>
                       </button>
-                      <button type="button" className="intent-btn out" disabled={processing} onClick={() => chooseAction('check-out')}>
-                        <span className="ib-label">{processing ? 'PLEASE WAIT…' : 'CHECK OUT'}</span>
-                        <span className="ib-hint">End current session</span>
-                      </button>
-                    </>
-                  )}
+                    ) : (
+                      <>
+                        <button type="button" className={`intent-btn in ${suggested === 'check-in' ? 'suggested' : 'muted'}`} disabled={processing} onClick={() => chooseAction('check-in')}>
+                          {suggested === 'check-in' && <span className="ib-badge">Suggested</span>}
+                          <span className="ib-label">{processing ? 'PLEASE WAIT…' : 'CHECK IN'}</span>
+                          <span className="ib-hint">{suggested === 'check-out' ? 'Already checked in' : 'Start a session'}</span>
+                        </button>
+                        <button type="button" className={`intent-btn out ${suggested === 'check-out' ? 'suggested' : 'muted'}`} disabled={processing} onClick={() => chooseAction('check-out')}>
+                          {suggested === 'check-out' && <span className="ib-badge">Suggested</span>}
+                          <span className="ib-label">{processing ? 'PLEASE WAIT…' : 'CHECK OUT'}</span>
+                          <span className="ib-hint">{suggested === 'check-in' ? 'Not checked in' : 'End current session'}</span>
+                        </button>
+                      </>
+                    )}
+                  </div>
+                  <div className="prompt-timer" aria-hidden="true" style={{ '--prompt-ms': `${PROMPT_MS}ms` }}>
+                    <span key={emp.id} />
+                  </div>
+                  <div className="detected-foot">Nothing is recorded until you press a button.</div>
                 </div>
-                <div className="detected-foot">Attendance is only recorded after a button is pressed.</div>
-              </div>
-            )}
+              )
+            })()}
 
             {last?.attendance && (
               <div className="rc-strip">
@@ -427,7 +486,7 @@ export default function Scan() {
       </div>
 
       {confirmation && (
-        <div className={`confirmation-backdrop ${confirmation.late ? 'late' : ''}`} role="dialog" aria-modal="true" aria-labelledby="confirmation-title" onMouseDown={(e) => e.target === e.currentTarget && closeConfirmation()}>
+        <div className={`confirmation-backdrop ${confirmation.late ? 'late' : ''}`} role="dialog" aria-modal="true" aria-labelledby="confirmation-title" aria-describedby="confirmation-desc" onMouseDown={(e) => e.target === e.currentTarget && closeConfirmation()}>
           <div className={`confirmation-dialog ${confirmation.kind} ${confirmation.late ? 'is-late' : ''}`}>
             <button className="confirmation-close" onClick={closeConfirmation} aria-label="Close confirmation">×</button>
             <div className="confirmation-icon" aria-hidden="true">
@@ -436,23 +495,35 @@ export default function Scan() {
                 <path className="confirmation-check" d="M14 27.5 22 35l16-18" />
               </svg>
             </div>
-            <div className="confirmation-kicker">{confirmation.late ? 'Late arrival noted' : confirmation.kind === 'check-in' ? 'Attendance recorded' : confirmation.kind === 'visit' ? 'Visit recorded' : 'Day complete'}</div>
+            <div className="confirmation-kicker">{confirmation.late ? 'Late arrival noted' : confirmation.kind === 'check-in' ? 'Attendance recorded' : confirmation.kind === 'visit' ? 'Visit recorded' : 'Checked out'}</div>
             <h2 id="confirmation-title">
-              {confirmation.late ? 'You made it.' : greeting}, <b>{confirmation.employee?.name?.split(' ')[0] || 'there'}</b>
+              {confirmation.late ? 'Welcome in' : greeting}, <b>{confirmation.employee?.name?.split(' ')[0] || 'there'}</b>
             </h2>
-            <p className="confirmation-message">
+            <p className="confirmation-message" id="confirmation-desc">
               {confirmation.late
-                ? `Your check-in was recorded at ${confirmation.time}. We marked this arrival as late.`
+                ? 'Your check-in was recorded and marked as a late arrival.'
                 : confirmation.kind === 'check-in'
-                  ? `Your check-in was recorded at ${confirmation.time}. Have a great day!`
+                  ? 'Your check-in was recorded. Have a great day!'
                   : confirmation.kind === 'visit'
-                    ? `Your visit was logged at ${confirmation.time}. Thanks for stopping by!`
-                    : `Your check-out was recorded at ${confirmation.time}. This session lasted ${confirmation.hours}. See you next time!`}
+                    ? 'Your visit was logged. Thanks for stopping by!'
+                    : 'Your check-out was recorded. See you next time!'}
             </p>
+            <div className="confirmation-facts">
+              <div><span>{confirmation.kind === 'check-out' ? 'Out at' : confirmation.kind === 'visit' ? 'Visit at' : 'In at'}</span><b>{confirmation.time}</b></div>
+              {confirmation.kind === 'check-in' && (
+                <div><span>Status</span><b className={confirmation.late ? 'bad' : ''}>{confirmation.late ? 'Late' : 'On time'}</b></div>
+              )}
+              {confirmation.kind === 'check-out' && (
+                <div><span>This session</span><b>{confirmation.hours}</b></div>
+              )}
+              {confirmation.kind === 'check-out' && confirmation.sessions > 1 && (
+                <div><span>Today</span><b>{confirmation.total}</b></div>
+              )}
+            </div>
             {confirmation.phone && <div className="phone-note">Verified with your phone number</div>}
-            {confirmation.late && <div className="late-note"><span className="late-spark">✦</span> Late arrival recorded — no further action needed.</div>}
-            <button className={`btn confirmation-button ${confirmation.late ? 'bolt' : ''}`} onClick={closeConfirmation}>Continue</button>
-            <div className="confirmation-auto-close">closing automatically</div>
+            <button autoFocus className={`btn confirmation-button ${confirmation.late ? 'bolt' : ''}`} onClick={closeConfirmation}>Continue</button>
+            <div className="confirmation-timer" aria-hidden="true" style={{ '--confirm-ms': `${CONFIRM_MS}ms` }}><span /></div>
+            <div className="confirmation-auto-close">closes automatically · Esc to dismiss</div>
           </div>
         </div>
       )}

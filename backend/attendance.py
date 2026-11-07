@@ -163,6 +163,7 @@ def scan_prompt(employee_id: str) -> dict:
         if emp is None:
             raise AttendanceError("unknown_employee", "No active employee with that id.")
         public = public_employee(emp)
+        since = None
         if is_field(emp):
             suggested = CHECK_IN
         else:
@@ -170,11 +171,14 @@ def scan_prompt(employee_id: str) -> dict:
             sessions = _sessions_for(row) if row else []
             active = bool(sessions and sessions[-1].get("check_out") is None)
             suggested = CHECK_OUT if active else CHECK_IN
+            if active:
+                since = decrypt_text(sessions[-1]["check_in"])
     return {
         "action": "DETECTED",
         "message": f"{public['name']} recognised. Choose check-in or check-out.",
         "employee": public,
         "suggested_action": suggested,
+        "checked_in_since": since,
     }
 
 
@@ -202,6 +206,7 @@ def record_scan(
         date, now = db.today_str(), db.now_str()
         row = s.attendance_for(employee_id, date)
         public = public_employee(emp)
+        session_hours = None
 
         if row is None:
             if intent == CHECK_OUT:
@@ -212,7 +217,7 @@ def record_scan(
                     employee=public,
                 )
             _guard_buffer()
-            status = "Late" if _is_late(now, late_at) else "Present"
+            status = "Late" if _is_late(db.office_time_str(now), late_at) else "Present"
             s.insert_attendance(
                 {
                     "employee_id": employee_id,
@@ -291,6 +296,7 @@ def record_scan(
         "attendance": fresh,
         "time": now,
         "session_count": len(fresh.get("sessions") or []),
+        "session_hours_fmt": _format_hours(session_hours) if session_hours is not None else None,
     }
 
 def _record_visit(s, emp: dict, source: str) -> dict:
