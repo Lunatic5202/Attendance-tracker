@@ -78,8 +78,8 @@ export default function PhoneCheckin() {
     navigate('scan')
   }
 
-  async function submit(e) {
-    e?.preventDefault()
+  // Nothing is recorded until one of the two big buttons is pressed.
+  async function submit(action) {
     if (busy || done) return
     if (digits.length < 6) {
       setError('Please type your full phone number.')
@@ -92,7 +92,7 @@ export default function PhoneCheckin() {
     const image = camRef.current?.capture() || null
     let res
     try {
-      res = await api.phoneCheckin(digits, image)
+      res = await api.phoneCheckin(digits, image, action)
     } catch (err) {
       res = err.data && err.data.action ? err.data : { action: 'UNKNOWN', message: err.message }
     } finally {
@@ -123,6 +123,12 @@ export default function PhoneCheckin() {
       setError(`Someone else just checked in. Please wait ${res.retry_after ?? 'a few'} seconds and press the green button again.`)
     } else if (res.action === 'DUPLICATE_SCAN') {
       setError('You are already checked out for today.')
+    } else if (res.action === 'ALREADY_CHECKED_IN') {
+      setError(`${name ? `${name}, ` : ''}you are already checked in today. Press the red Check Out button when you leave.`)
+    } else if (res.action === 'NOT_CHECKED_IN') {
+      setError(`${name ? `${name}, ` : ''}you have not checked in today. Press the green Check In button first.`)
+    } else if (res.action === 'FIELD_NO_CHECKOUT') {
+      setError('Field staff do not check out. Press the green Check In button to log a visit.')
     } else {
       setError(res.message || 'Could not check you in. Please try again or ask an administrator.')
     }
@@ -137,7 +143,7 @@ export default function PhoneCheckin() {
         <div>
           <span className="kicker plain">Kiosk // Phone Check-In</span>
           <h1>Phone <b>Check-In</b></h1>
-          <div className="sub">Type the phone number saved on your profile, then press the green button.</div>
+          <div className="sub">Type the phone number saved on your profile, then press Check In when you arrive or Check Out when you leave.</div>
         </div>
         <button type="button" className="btn ghost big-back" onClick={() => navigate('scan')}>
           ← Back to face scan
@@ -155,12 +161,12 @@ export default function PhoneCheckin() {
           <div className="cam-col">
             <CameraCapture ref={camRef} active onError={setCamError} />
             <div className="cam-caption">
-              <span>LOOK AT THE CAMERA — A PHOTO IS TAKEN WHEN YOU PRESS CHECK IN</span>
+              <span>LOOK AT THE CAMERA — A PHOTO IS TAKEN WHEN YOU PRESS A BUTTON</span>
               <span className="mono">{camError ? 'CAM 01 · OFFLINE' : 'CAM 01 · LIVE'}</span>
             </div>
           </div>
 
-          <form className="card phone-pad" onSubmit={submit}>
+          <form className="card phone-pad" onSubmit={(e) => e.preventDefault()}>
             <label className="phone-pad-label" htmlFor="phone-display">Your phone number</label>
             <input
               id="phone-display"
@@ -191,10 +197,19 @@ export default function PhoneCheckin() {
               <button type="button" className="key key-back" onClick={backspace} disabled={busy || !digits} aria-label="Delete last digit">⌫</button>
             </div>
 
-            <button className="btn big-action go" type="submit" disabled={busy || digits.length < 6}>
-              {busy ? 'Checking…' : 'Check In / Check Out'}
-            </button>
-            <div className="phone-help mono">One press records your check-in. Press again later in the day to check out.</div>
+            <div className="intent-row" role="group" aria-label="Choose what you are doing">
+              <button type="button" className="intent-btn in" onClick={() => submit('check-in')} disabled={busy || digits.length < 6}>
+                <span className="ib-icon" aria-hidden="true">→</span>
+                <span className="ib-label">{busy ? 'Checking…' : 'Check In'}</span>
+                <span className="ib-hint">I am arriving</span>
+              </button>
+              <button type="button" className="intent-btn out" onClick={() => submit('check-out')} disabled={busy || digits.length < 6}>
+                <span className="ib-icon" aria-hidden="true">←</span>
+                <span className="ib-label">{busy ? 'Checking…' : 'Check Out'}</span>
+                <span className="ib-hint">I am leaving</span>
+              </button>
+            </div>
+            <div className="phone-help mono">Type your number, then press the button for what you are doing. Nothing is recorded until you press it.</div>
           </form>
         </div>
       )}

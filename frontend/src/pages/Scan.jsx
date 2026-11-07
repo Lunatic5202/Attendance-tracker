@@ -14,6 +14,9 @@ const actions = {
   CHECKOUT_TOO_EARLY: { label: 'Check-Out Held', cls: 'warn', icon: '⏱' },
   WAIT: { label: 'One At A Time', cls: 'warn', icon: '⏱' },
   DEMO_NEEDS_EMPLOYEE: { label: 'Pick Employee', cls: 'idle', icon: '!' },
+  ALREADY_CHECKED_IN: { label: 'Already Checked In', cls: 'warn', icon: '!' },
+  NOT_CHECKED_IN: { label: 'Check In First', cls: 'warn', icon: '!' },
+  FIELD_NO_CHECKOUT: { label: 'No Check-Out Needed', cls: 'idle', icon: '!' },
 }
 
 const star = () => new Date().toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true })
@@ -21,7 +24,7 @@ const star = () => new Date().toLocaleTimeString('en-IN', { hour: '2-digit', min
 const IDLE_SLEEP_MS = 30 * 1000
 
 export default function Scan() {
-  const [scanning, setScanning] = useState(true)
+  const [busy, setBusy] = useState(false)
   const [asleep, setAsleep] = useState(false)
   const [camError, setCamError] = useState(null)
   const [last, setLast] = useState(null)
@@ -37,6 +40,7 @@ export default function Scan() {
   const logBox = useRef(null)
   const asleepRef = useRef(false)
   const lastActivity = useRef(Date.now())
+  const camRef = useRef(null)
 
   useEffect(() => {
     asleepRef.current = asleep
@@ -76,17 +80,27 @@ export default function Scan() {
   const pushLog = (t, s, tone = '') =>
     setLog((cur) => [...cur.slice(-29), { t, s, tone }])
 
-  const runScan = useCallback(async (frames) => {
-    if (lock.current || asleepRef.current || confirmationRef.current) return
+  // Nothing is scanned or recorded until the person presses Check In or Check Out.
+  async function scanNow(action) {
+    if (lock.current || confirmationRef.current) return
     lock.current = true
+    poke()
+    setAsleep(false)
+    setBusy(true)
     try {
-      handleResult(await api.scan(frames, undefined))
+      const frames = await camRef.current?.captureBurst(3)
+      if (!frames || !frames.length) {
+        handleResult({ action: 'LOW_QUALITY', message: 'The camera is not ready yet. Wait a moment and press the button again.' })
+        return
+      }
+      handleResult(await api.scan(frames, undefined, action))
     } catch (e) {
-      handleResult(e.data || {})
+      handleResult(e.data || { action: 'UNKNOWN', message: e.message })
     } finally {
       lock.current = false
+      setBusy(false)
     }
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  }
 
   function closeConfirmation() {
     clearTimeout(confirmationTimer.current)
@@ -190,6 +204,9 @@ export default function Scan() {
     } else if (action === 'LOW_QUALITY') {
       pushLog('VERIFY', res.message || 'image quality too low', 'err-line')
       toast(res.message || 'Poor image quality — try again')
+    } else if (action === 'ALREADY_CHECKED_IN' || action === 'NOT_CHECKED_IN' || action === 'FIELD_NO_CHECKOUT') {
+      pushLog('VERIFY', `${res.employee?.name || 'Employee'} — ${res.message}`, 'err-line')
+      toast(res.message)
     } else if (action === 'DEMO_NEEDS_EMPLOYEE') {
       pushLog('VERIFY', 'camera/demo mode — use simulate below', 'err-line')
     }
@@ -206,30 +223,36 @@ export default function Scan() {
         <div>
           <span className="kicker plain">Kiosk // Live Attendance</span>
           <h1>Face <b>Scan</b></h1>
-          <div className="sub">first scan → CHECK-IN · later scan after 4h → CHECK-OUT · field crew → VISIT · one check-in at a time</div>
+          <div className="sub">Look at the camera, then press <b>Check In</b> when you arrive or <b>Check Out</b> when you leave. Nothing is recorded until you press a button.</div>
         </div>
-        <label className="row" style={{ gap: '0.5rem', cursor: 'pointer' }}>
-          <input type="checkbox" checked={scanning} onChange={(e) => setScanning(e.target.checked)} />
-          <span className="mono" style={{ fontSize: '0.7rem', letterSpacing: '0.14em', color: 'var(--muted)' }}>
-            AUTO-SCAN
-          </span>
-        </label>
       </div>
 
       <div className="scan-grid">
         <div className="cam-col">
           <CameraCapture
-            active={scanning || asleep}
-            watch={scanning || asleep}
+            ref={camRef}
+            active
+            watch={asleep}
             motionThreshold={0.05}
             onMotion={onMotion}
             onError={setCamError}
-            onBurst={runScan}
-            burst={3}
           />
           <div className="cam-caption">
-            <span>TARGET FRAME — HOLD STILL</span>
-            <span className="mono">{scanning ? 'CAM 01 · LIVE' : 'CAM 01 · PAUSED'}</span>
+            <span>{busy ? 'SCANNING — HOLD STILL' : 'LOOK AT THE CAMERA, THEN PRESS A BUTTON'}</span>
+            <span className="mono">CAM 01 · LIVE</span>
+          </div>
+
+          <div className="intent-row" role="group" aria-label="Choose what you are doing">
+            <button type="button" className="intent-btn in" onClick={() => scanNow('check-in')} disabled={busy}>
+              <span className="ib-icon" aria-hidden="true">→</span>
+              <span className="ib-label">{busy ? 'Scanning…' : 'Check In'}</span>
+              <span className="ib-hint">I am arriving</span>
+            </button>
+            <button type="button" className="intent-btn out" onClick={() => scanNow('check-out')} disabled={busy}>
+              <span className="ib-icon" aria-hidden="true">←</span>
+              <span className="ib-label">{busy ? 'Scanning…' : 'Check Out'}</span>
+              <span className="ib-hint">I am leaving</span>
+            </button>
           </div>
 
           {phoneAllowed && (
@@ -311,7 +334,7 @@ export default function Scan() {
       <div className="card tight kiosk-note" style={{ marginTop: '1.4rem' }}>
         <span className="series-tag">Secure kiosk</span>
         <span className="mono" style={{ fontSize: '0.66rem', color: 'var(--muted)', letterSpacing: '0.1em' }}>
-          Only administrator-enrolled faces can create attendance records. Check-out unlocks after the configured work buffer.
+          Only administrator-enrolled faces can create attendance records. Press Check In on arrival and Check Out when you leave.
         </span>
       </div>
 
@@ -347,7 +370,7 @@ export default function Scan() {
       )}
 
       {asleep && (
-        <div className="kiosk-standby">
+        <div className="kiosk-standby" onClick={() => { poke(); setAsleep(false) }} role="button" tabIndex={0} onKeyDown={() => { poke(); setAsleep(false) }}>
           <div className="ks-radar">
             <span className="ks-ring r1" />
             <span className="ks-ring r2" />
@@ -356,7 +379,7 @@ export default function Scan() {
           </div>
           <div className="ks-gate">
             <div className="ks-kicker">TOUCHLESS KIOSK · STANDBY</div>
-            <h1>Wave to <b>Wake</b></h1>
+            <h1>Tap or Wave to <b>Wake</b></h1>
             <p className="ks-sub mono">
               motion near the camera reopens live scan
               {camError ? <span style={{ color: 'var(--bolt)' }}> · camera unavailable ({camError})</span> : null}

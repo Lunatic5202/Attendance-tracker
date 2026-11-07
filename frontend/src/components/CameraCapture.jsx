@@ -79,6 +79,22 @@ const CameraCapture = forwardRef(function CameraCapture({
       const v = videoRef.current
       return v && v.readyState >= 2 && v.videoWidth > 0 ? captureDataURL(v) : null
     },
+    // A short burst on demand (the kiosk scans only when a button is pressed).
+    // Resolves to the frames that were actually available; may be empty.
+    captureBurst: (count = 3, gapMs = 140) =>
+      new Promise((resolve) => {
+        const frames = []
+        let attempts = 0
+        const take = () => {
+          attempts += 1
+          const v = videoRef.current
+          if (v && v.readyState >= 2 && v.videoWidth > 0) frames.push(captureDataURL(v))
+          // Bounded: give up after a few extra tries rather than waiting forever.
+          if (frames.length >= count || attempts >= count * 3) resolve(frames)
+          else setTimeout(take, gapMs)
+        }
+        take()
+      }),
   }), [])
 
   useEffect(() => {

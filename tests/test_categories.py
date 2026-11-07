@@ -196,6 +196,82 @@ class CheckinBufferTests(CategoryTestCase):
         self.assertEqual(len(attendance.get_by_date(TODAY)), 1)
 
 
+class ExplicitIntentTests(CategoryTestCase):
+    """The kiosk tells the server whether the person is checking in or out."""
+
+    def _scan(self, emp, intent, at):
+        with patch.object(db, "today_str", return_value=TODAY), patch.object(db, "now_str", return_value=at):
+            return attendance.record_scan(emp, intent=intent)
+
+    def test_check_in_then_check_out(self):
+        emp = add_employee("OF301", "Ila Das", "office")
+        self.assertEqual(self._scan(emp, "check-in", "09:00:00")["action"], "CHECK-IN")
+        attendance.reset_buffer()
+        self.assertEqual(self._scan(emp, "check-out", "09:05:00")["action"], "CHECK-OUT")
+
+    def test_no_minimum_before_check_out_by_default(self):
+        """Site visits: someone can leave minutes after arriving."""
+        self.assertEqual(attendance.MIN_CHECKOUT_HOURS, 0)
+        emp = add_employee("OF302", "Jai Sen", "office")
+        self._scan(emp, "check-in", "09:00:00")
+        attendance.reset_buffer()
+        result = self._scan(emp, "check-out", "09:01:00")
+        self.assertEqual(result["action"], "CHECK-OUT")
+
+    def test_minimum_can_still_be_switched_on(self):
+        emp = add_employee("OF303", "Kavya Rao", "office")
+        self._scan(emp, "check-in", "09:00:00")
+        attendance.reset_buffer()
+        with patch.object(attendance, "MIN_CHECKOUT_HOURS", 4.0):
+            with self.assertRaises(attendance.AttendanceError) as ctx:
+                self._scan(emp, "check-out", "10:00:00")
+        self.assertEqual(ctx.exception.code, "checkout_too_early")
+
+    def test_check_out_before_check_in_is_refused_and_records_nothing(self):
+        emp = add_employee("OF304", "Lata Nair", "office")
+        with self.assertRaises(attendance.AttendanceError) as ctx:
+            self._scan(emp, "check-out", "09:00:00")
+        self.assertEqual(ctx.exception.code, "not_checked_in")
+        self.assertEqual(attendance.get_by_date(TODAY), [])
+
+    def test_checking_in_twice_is_refused(self):
+        emp = add_employee("OF305", "Manu Pillai", "office")
+        self._scan(emp, "check-in", "09:00:00")
+        attendance.reset_buffer()
+        with self.assertRaises(attendance.AttendanceError) as ctx:
+            self._scan(emp, "check-in", "09:02:00")
+        self.assertEqual(ctx.exception.code, "already_checked_in")
+        self.assertEqual(len(attendance.get_by_date(TODAY)), 1)
+        self.assertIsNone(attendance.get_by_date(TODAY)[0]["check_out"])
+
+    def test_after_checking_out_both_choices_are_duplicates(self):
+        emp = add_employee("OF306", "Nina Bose", "office")
+        self._scan(emp, "check-in", "09:00:00")
+        attendance.reset_buffer()
+        self._scan(emp, "check-out", "17:00:00")
+        for intent in ("check-in", "check-out"):
+            with self.assertRaises(attendance.AttendanceError) as ctx:
+                self._scan(emp, intent, "17:05:00")
+            self.assertEqual(ctx.exception.code, "duplicate_scan")
+
+    def test_field_staff_log_visits_with_check_in_and_cannot_check_out(self):
+        emp = add_employee("FLD301", "Omar Khan", "field")
+        self.assertEqual(self._scan(emp, "check-in", "10:00:00")["action"], "VISIT")
+        attendance.reset_buffer()
+        with self.assertRaises(attendance.AttendanceError) as ctx:
+            self._scan(emp, "check-out", "10:30:00")
+        self.assertEqual(ctx.exception.code, "field_no_checkout")
+        self.assertEqual(len(attendance.get_visits(TODAY)), 1)
+
+    def test_intent_is_optional_and_loosely_spelled(self):
+        self.assertIsNone(attendance.normalise_intent(None))
+        self.assertIsNone(attendance.normalise_intent("whatever"))
+        for value in ("check-in", "CHECK_IN", "in"):
+            self.assertEqual(attendance.normalise_intent(value), "check-in")
+        for value in ("check-out", "Checkout", "out"):
+            self.assertEqual(attendance.normalise_intent(value), "check-out")
+
+
 class ReportingSplitTests(CategoryTestCase):
     def test_office_kpis_exclude_field_visits(self):
         add_employee("OF200", "Hana Ito", "office")

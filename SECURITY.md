@@ -12,7 +12,7 @@ Employee profile fields, attendance timestamps, and biometric templates are encr
 
 The service must run behind HTTPS in production. Set `ENVIRONMENT=production`, configure `ALLOWED_ORIGINS` to the exact company hostname, and never use `*` for CORS. Set a strong administrator password through the environment; it is for administrators only, not employees. Do not commit `.env` files, the database, or the `data/faces` directory.
 
-The default four-hour minimum between check-in and check-out is enforced on the server through `MIN_CHECKOUT_HOURS=4`. Changing the visible UI cannot bypass this rule. An early second scan is rejected and returns the remaining wait time.
+There is no minimum time between check-in and check-out by default (`MIN_CHECKOUT_HOURS=0`), because many staff leave for site visits. Set `MIN_CHECKOUT_HOURS` above 0 to require one; it is enforced on the server, so changing the visible UI cannot bypass it, and an early check-out is rejected with the remaining wait time. The kiosk records nothing until the person presses **Check In** or **Check Out**, and the server refuses a mismatch (checking out before checking in, or checking in twice).
 
 ## Recommended rollout
 

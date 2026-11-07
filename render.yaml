@@ -23,7 +23,7 @@ services:
       - key: ALLOWED_ORIGINS
         sync: false
       - key: MIN_CHECKOUT_HOURS
-        value: "4"
+        value: "0"        # 0 = no minimum before check-out (site visits); raise it to re-enable a work buffer
       - key: LATE_AT
         value: "09:30"    # fixed office shift start; a later check-in is Late
       - key: CHECKIN_BUFFER_SECONDS

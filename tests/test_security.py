@@ -6,7 +6,6 @@ from unittest.mock import patch
 os.environ["ATTENDANCE_MASTER_KEY"] = "test-master-key"
 os.environ["ATTENDANCE_DATA"] = tempfile.mkdtemp(prefix="attendance-tests-")
 os.environ["ATTENDANCE_DB"] = os.path.join(os.environ["ATTENDANCE_DATA"], "test.db")
-os.environ["MIN_CHECKOUT_HOURS"] = "4"
 
 from backend import attendance, database as db
 from backend.security import create_session, decrypt_text, encrypt_text, verify_session
@@ -39,8 +38,9 @@ class SecurityAndAttendanceTests(unittest.TestCase):
         self.assertTrue(verify_session(token))
         self.assertFalse(verify_session(token + "x"))
 
-    def test_checkout_is_blocked_until_buffer(self):
-        with patch.object(db, "today_str", return_value="2026-09-18"), patch.object(db, "now_str", side_effect=["09:00:00", "12:59:59", "13:00:00"]):
+    def test_checkout_is_blocked_until_buffer_when_a_minimum_is_configured(self):
+        # The minimum is opt-in (MIN_CHECKOUT_HOURS > 0); the default is no minimum.
+        with patch.object(attendance, "MIN_CHECKOUT_HOURS", 4.0), patch.object(db, "today_str", return_value="2026-09-18"), patch.object(db, "now_str", side_effect=["09:00:00", "12:59:59", "13:00:00"]):
             first = attendance.record_scan("EMP001")
             self.assertEqual(first["action"], "CHECK-IN")
             with self.assertRaises(attendance.AttendanceError) as ctx:

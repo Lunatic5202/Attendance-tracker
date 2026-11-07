@@ -110,6 +110,7 @@ class ScanRequest(BaseModel):
     image: str | None = Field(None, max_length=4_000_000)  # base64 frame from the browser camera
     images: list[str] | None = Field(None, max_length=6)  # short burst; voted server-side
     employee_id: str | None = None  # explicit id, only honoured by demo engine
+    action: str | None = Field(None, pattern="^(check-in|check-out)$")  # what the person chose on the kiosk
 
     @field_validator("images")
     @classmethod
@@ -125,6 +126,7 @@ class ScanRequest(BaseModel):
 class PhoneCheckinRequest(BaseModel):
     phone: str = Field(min_length=1, max_length=32)
     image: str | None = Field(None, max_length=4_000_000)  # base64 snapshot from the kiosk camera
+    action: str | None = Field(None, pattern="^(check-in|check-out)$")  # what the person chose on the kiosk
 
 
 class ManualRequest(BaseModel):
@@ -507,7 +509,7 @@ def departments(_: bool = Depends(require_admin)):
 # --------------------------------------------------------------------------
 @app.post("/api/attendance/scan")
 def scan_attendance(body: ScanRequest, request: Request):
-    """Auto check-in / check-out driven by a recognised face."""
+    """Check in / out for a recognised face. ``action`` says which one the person chose."""
     client = client_identity(request)
     allowed, retry_after = scan_limiter.check(client)
     if not allowed:
@@ -555,7 +557,7 @@ def scan_attendance(body: ScanRequest, request: Request):
         raise HTTPException(503, "Face recognition is unavailable; public scanning is disabled.")
 
     try:
-        result = attendance.record_scan(employee_id, source="face")
+        result = attendance.record_scan(employee_id, source="face", intent=body.action)
         return result
     except AttendanceError as exc:
         return _attendance_error_response(exc)
@@ -570,7 +572,7 @@ def _attendance_error_response(exc: AttendanceError) -> JSONResponse:
             status_code=429,
             headers={"Retry-After": str(exc.info.get("retry_after", 1))},
         )
-    status_code = 409 if exc.code == "duplicate_scan" else 422
+    status_code = 409 if exc.code in ("duplicate_scan", "already_checked_in", "not_checked_in") else 422
     return JSONResponse(
         {"action": exc.code.upper(), "message": exc.message, **exc.info},
         status_code=status_code,
@@ -613,7 +615,7 @@ def phone_attendance(body: PhoneCheckinRequest, request: Request):
         return JSONResponse({"action": "UNKNOWN", "message": exc.message}, status_code=exc.status)
 
     try:
-        result = attendance.record_scan(employee["id"], source="phone")
+        result = attendance.record_scan(employee["id"], source="phone", intent=body.action)
     except AttendanceError as exc:
         return _attendance_error_response(exc)
 
