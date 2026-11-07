@@ -24,7 +24,6 @@ const star = () => new Date().toLocaleTimeString('en-IN', { hour: '2-digit', min
 const IDLE_SLEEP_MS = 30 * 1000
 
 export default function Scan() {
-  const [busy, setBusy] = useState(false)
   const [asleep, setAsleep] = useState(false)
   const [camError, setCamError] = useState(null)
   const [last, setLast] = useState(null)
@@ -80,27 +79,19 @@ export default function Scan() {
   const pushLog = (t, s, tone = '') =>
     setLog((cur) => [...cur.slice(-29), { t, s, tone }])
 
-  // Nothing is scanned or recorded until the person presses Check In or Check Out.
-  async function scanNow(action) {
-    if (lock.current || confirmationRef.current) return
+  // Automatically verify each three-frame burst from the live camera.
+  // The server infers check-in vs check-out from the employee's attendance state.
+  const runScan = useCallback(async (frames) => {
+    if (lock.current || asleepRef.current || confirmationRef.current || !frames?.length) return
     lock.current = true
-    poke()
-    setAsleep(false)
-    setBusy(true)
     try {
-      const frames = await camRef.current?.captureBurst(3)
-      if (!frames || !frames.length) {
-        handleResult({ action: 'LOW_QUALITY', message: 'The camera is not ready yet. Wait a moment and press the button again.' })
-        return
-      }
-      handleResult(await api.scan(frames, undefined, action))
+      handleResult(await api.scan(frames, undefined))
     } catch (e) {
       handleResult(e.data || { action: 'UNKNOWN', message: e.message })
     } finally {
       lock.current = false
-      setBusy(false)
     }
-  }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   function closeConfirmation() {
     clearTimeout(confirmationTimer.current)
@@ -218,12 +209,12 @@ export default function Scan() {
     : ''
 
   return (
-    <div className="page">
+    <div className="page scan-page">
       <div className="page-head">
         <div>
           <span className="kicker plain">Kiosk // Live Attendance</span>
           <h1>Face <b>Scan</b></h1>
-          <div className="sub">Look at the camera, then press <b>Check In</b> when you arrive or <b>Check Out</b> when you leave. Nothing is recorded until you press a button.</div>
+          <div className="sub">Automatic face detection is active. Stand in front of the camera and hold still — check-in and check-out are handled automatically.</div>
         </div>
       </div>
 
@@ -236,23 +227,12 @@ export default function Scan() {
             motionThreshold={0.05}
             onMotion={onMotion}
             onError={setCamError}
+            onBurst={runScan}
+            burst={3}
           />
           <div className="cam-caption">
-            <span>{busy ? 'SCANNING — HOLD STILL' : 'LOOK AT THE CAMERA, THEN PRESS A BUTTON'}</span>
+            <span>AUTOMATIC DETECTION — HOLD STILL</span>
             <span className="mono">CAM 01 · LIVE</span>
-          </div>
-
-          <div className="intent-row" role="group" aria-label="Choose what you are doing">
-            <button type="button" className="intent-btn in" onClick={() => scanNow('check-in')} disabled={busy}>
-              <span className="ib-icon" aria-hidden="true">→</span>
-              <span className="ib-label">{busy ? 'Scanning…' : 'Check In'}</span>
-              <span className="ib-hint">I am arriving</span>
-            </button>
-            <button type="button" className="intent-btn out" onClick={() => scanNow('check-out')} disabled={busy}>
-              <span className="ib-icon" aria-hidden="true">←</span>
-              <span className="ib-label">{busy ? 'Scanning…' : 'Check Out'}</span>
-              <span className="ib-hint">I am leaving</span>
-            </button>
           </div>
 
           {phoneAllowed && (
@@ -331,10 +311,10 @@ export default function Scan() {
         </div>
       </div>
 
-      <div className="card tight kiosk-note" style={{ marginTop: '1.4rem' }}>
+      <div className="card tight kiosk-note" style={{ marginTop: '0.65rem' }}>
         <span className="series-tag">Secure kiosk</span>
         <span className="mono" style={{ fontSize: '0.66rem', color: 'var(--muted)', letterSpacing: '0.1em' }}>
-          Only administrator-enrolled faces can create attendance records. Press Check In on arrival and Check Out when you leave.
+          Only administrator-enrolled faces can create attendance records. First scan checks you in; a later scan checks you out automatically.
         </span>
       </div>
 
