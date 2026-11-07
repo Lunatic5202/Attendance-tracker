@@ -530,6 +530,8 @@ def scan_attendance(body: ScanRequest, request: Request):
         )
         if outcome["status"] == "low_quality":
             return JSONResponse({"action": "LOW_QUALITY", "message": outcome["reason"]})
+        if outcome["status"] == "no_face":
+            return JSONResponse({"action": "NO_FACE", "message": "No face is visible in the camera frame."})
         if outcome["status"] == "ambiguous":
             return JSONResponse(
                 {"action": "UNKNOWN", "message": "Match too close to call — hold still and try again."}
@@ -557,8 +559,11 @@ def scan_attendance(body: ScanRequest, request: Request):
         raise HTTPException(503, "Face recognition is unavailable; public scanning is disabled.")
 
     try:
-        result = attendance.record_scan(employee_id, source="face", intent=body.action)
-        return result
+        # Recognition is deliberately separate from recording: the kiosk
+        # highlights the employee and waits for an explicit Check In / Check Out.
+        if body.action is None:
+            return attendance.scan_prompt(employee_id)
+        return attendance.record_scan(employee_id, source="face", intent=body.action)
     except AttendanceError as exc:
         return _attendance_error_response(exc)
 

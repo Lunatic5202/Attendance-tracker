@@ -57,9 +57,9 @@ export default function AttendancePage() {
 
   function exportCsv() {
     const esc = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`
-    const head = ['Date', 'Employee ID', 'Employee', 'Department', 'Check-In', 'Check-Out', 'Hours', 'Status']
+    const head = ['Date', 'Employee ID', 'Employee', 'Department', 'Check-In', 'Check-Out', 'Sessions', 'Total Hours', 'Status']
     const lines = rows.map((r) =>
-      [r.date, r.employee_id, r.name, r.department, r.check_in, r.check_out, r.hours_fmt || '', r.status]
+      [r.date, r.employee_id, r.name, r.department, r.check_in, r.check_out, (r.sessions || []).map((x) => `${x.check_in || '—'}-${x.check_out || 'ACTIVE'}`).join(' | '), r.hours_fmt || '', r.status]
         .map(esc)
         .join(',')
     )
@@ -85,7 +85,7 @@ export default function AttendancePage() {
         <div>
           <span className="kicker plain">Daily / Historical</span>
           <h1>Attendance <b>Records</b></h1>
-          <div className="sub">office staff check in and out; field staff log one visit per scan</div>
+          <div className="sub">office staff can record multiple check-in/check-out sessions per day; field staff log one visit per scan</div>
         </div>
         <button className="btn" onClick={exportCsv} disabled={rows.length === 0 && visits.length === 0}>↧ Export CSV</button>
       </div>
@@ -120,7 +120,8 @@ export default function AttendancePage() {
                     <th>Department</th>
                     <th>Check-In</th>
                     <th>Check-Out</th>
-                    <th>Hours</th>
+                    <th>Sessions</th>
+                    <th>Total Hours</th>
                     <th>Status</th>
                     <th>Source</th>
                   </tr>
@@ -136,6 +137,17 @@ export default function AttendancePage() {
                       <td className="muted-cell">{r.department}</td>
                       <td className="mono">{fmtTime(r.check_in)}</td>
                       <td className="mono">{fmtTime(r.check_out)}</td>
+                      <td>
+                        <div className="session-list">
+                          {(r.sessions || []).map((session, index) => (
+                            <div className="session-item mono" key={index}>
+                              <span>{fmtTime(session.check_in)}</span>
+                              <span className="muted-cell">→</span>
+                              <span>{session.check_out ? fmtTime(session.check_out) : 'ACTIVE'}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </td>
                       <td className="mono strong-cell">{r.hours_fmt || '—'}</td>
                       <td>
                         <span className={`badge ${r.status === 'Late' ? 'warn' : 'ok'}`}>{r.status}</span>

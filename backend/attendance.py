@@ -18,6 +18,7 @@ Rules:
     back to back, which is also when mis-reads are most likely.
 """
 
+import json
 import os
 import logging
 import time
@@ -138,21 +139,52 @@ def _format_hours(hours: float) -> str:
     return f"{h}h {m:02d}m"
 
 
+def _sessions_for(row: dict) -> list[dict]:
+    """Read new session history, falling back to the original one-row record."""
+    try:
+        sessions = json.loads(row.get("sessions") or "[]")
+    except (TypeError, ValueError):
+        sessions = []
+    if sessions:
+        return sessions
+    if row.get("check_in"):
+        return [{
+            "check_in": row["check_in"],
+            "check_out": row.get("check_out"),
+            "hours": float(row.get("hours") or 0),
+        }]
+    return []
+
+
+def scan_prompt(employee_id: str) -> dict:
+    """Return a recognition result and the next valid action without recording it."""
+    with store.session() as s:
+        emp = s.get_active_employee(employee_id)
+        if emp is None:
+            raise AttendanceError("unknown_employee", "No active employee with that id.")
+        public = public_employee(emp)
+        if is_field(emp):
+            suggested = CHECK_IN
+        else:
+            row = s.attendance_for(employee_id, db.today_str())
+            sessions = _sessions_for(row) if row else []
+            active = bool(sessions and sessions[-1].get("check_out") is None)
+            suggested = CHECK_OUT if active else CHECK_IN
+    return {
+        "action": "DETECTED",
+        "message": f"{public['name']} recognised. Choose check-in or check-out.",
+        "employee": public,
+        "suggested_action": suggested,
+    }
+
+
 def record_scan(
     employee_id: str,
     source: str = "face",
     late_at: str = DEFAULT_LATE_AT,
     intent: str | None = None,
 ) -> dict:
-    """Record one check-in / check-out for a recognised employee.
-
-    ``intent`` is what the person chose on the kiosk (``"check-in"`` or
-    ``"check-out"``). Without it the old rule applies: first scan checks in,
-    the next one checks out.
-
-    Field staff are routed to :func:`record_visit` instead: one row per scan,
-    no check-out and no working-hours maths.
-    """
+    """Record one attendance session action; office staff may repeat indefinitely."""
     intent = normalise_intent(intent)
     with store.session() as s:
         emp = s.get_active_employee(employee_id)
@@ -175,7 +207,7 @@ def record_scan(
             if intent == CHECK_OUT:
                 raise AttendanceError(
                     "not_checked_in",
-                    "You have not checked in today, so there is nothing to check out. Press Check In first.",
+                    "You are not currently checked in. Press Check In first.",
                     employee_id=employee_id,
                     employee=public,
                 )
@@ -193,46 +225,63 @@ def record_scan(
                     "created_at": encrypt_text(now),
                 }
             )
+            row = s.attendance_for(employee_id, date)
+            sessions = [{"check_in": encrypt_text(now), "check_out": None, "hours": 0.0}]
+            s.set_attendance_sessions(row["id"], json.dumps(sessions), None, 0.0)
             _mark_checkin()
             action = "CHECK-IN"
-        elif row["check_out"] is None:
-            check_in = decrypt_text(row["check_in"])
-            if intent == CHECK_IN:
-                raise AttendanceError(
-                    "already_checked_in",
-                    "You are already checked in today. Press Check Out when you leave.",
-                    employee_id=employee_id,
-                    employee=public,
-                    check_in=check_in[:5],
-                )
-            seconds = (_parse_time(now) - _parse_time(check_in)).total_seconds()
-            if MIN_CHECKOUT_HOURS > 0 and seconds < MIN_CHECKOUT_HOURS * 3600:
-                remaining = max(1, int((MIN_CHECKOUT_HOURS * 3600 - seconds + 59) // 60))
-                unlocks_at = (_parse_time(check_in) + timedelta(hours=MIN_CHECKOUT_HOURS)).strftime("%H:%M")
-                raise AttendanceError(
-                    "checkout_too_early",
-                    (
-                        f"Check-in is held until {unlocks_at} — "
-                        f"{MIN_CHECKOUT_HOURS:g} hours after check-in at {check_in[:5]}."
-                    ),
-                    employee_id=employee_id,
-                    employee=public,
-                    check_in=check_in[:5],
-                    unlocks_at=unlocks_at,
-                    minutes_remaining=remaining,
-                    min_checkout_hours=MIN_CHECKOUT_HOURS,
-                )
-            hours = round(max(0, seconds) / 3600, 3)
-            s.close_attendance(row["id"], encrypt_text(now), hours)
-            action = "CHECK-OUT"
         else:
-            raise AttendanceError(
-                "duplicate_scan",
-                "Attendance already recorded for today (already checked out).",
-                employee_id=employee_id,
-                employee=public,
-                date=date,
-            )
+            sessions = _sessions_for(row)
+            active = bool(sessions and sessions[-1].get("check_out") is None)
+
+            if active:
+                if intent == CHECK_IN:
+                    check_in = decrypt_text(sessions[-1]["check_in"])
+                    raise AttendanceError(
+                        "already_checked_in",
+                        "You are already checked in. Press Check Out when you leave.",
+                        employee_id=employee_id,
+                        employee=public,
+                        check_in=check_in[:5],
+                    )
+                check_in = decrypt_text(sessions[-1]["check_in"])
+                seconds = (_parse_time(now) - _parse_time(check_in)).total_seconds()
+                if MIN_CHECKOUT_HOURS > 0 and seconds < MIN_CHECKOUT_HOURS * 3600:
+                    remaining = max(1, int((MIN_CHECKOUT_HOURS * 3600 - seconds + 59) // 60))
+                    unlocks_at = (_parse_time(check_in) + timedelta(hours=MIN_CHECKOUT_HOURS)).strftime("%H:%M")
+                    raise AttendanceError(
+                        "checkout_too_early",
+                        (
+                            f"Check-out is held until {unlocks_at} — "
+                            f"{MIN_CHECKOUT_HOURS:g} hours after check-in at {check_in[:5]}."
+                        ),
+                        employee_id=employee_id,
+                        employee=public,
+                        check_in=check_in[:5],
+                        unlocks_at=unlocks_at,
+                        minutes_remaining=remaining,
+                        min_checkout_hours=MIN_CHECKOUT_HOURS,
+                    )
+                session_hours = round(max(0, seconds) / 3600, 3)
+                sessions[-1]["check_out"] = encrypt_text(now)
+                sessions[-1]["hours"] = session_hours
+                total_hours = round(sum(float(item.get("hours") or 0) for item in sessions), 3)
+                s.set_attendance_sessions(row["id"], json.dumps(sessions), encrypt_text(now), total_hours)
+                action = "CHECK-OUT"
+            else:
+                if intent == CHECK_OUT:
+                    raise AttendanceError(
+                        "not_checked_in",
+                        "You are not currently checked in. Press Check In first.",
+                        employee_id=employee_id,
+                        employee=public,
+                    )
+                _guard_buffer()
+                sessions.append({"check_in": encrypt_text(now), "check_out": None, "hours": 0.0})
+                total_hours = round(sum(float(item.get("hours") or 0) for item in sessions), 3)
+                s.set_attendance_sessions(row["id"], json.dumps(sessions), None, total_hours)
+                _mark_checkin()
+                action = "CHECK-IN"
 
     fresh = fetch_entry(employee_id, date)
     return {
@@ -241,8 +290,8 @@ def record_scan(
         "employee": public,
         "attendance": fresh,
         "time": now,
+        "session_count": len(fresh.get("sessions") or []),
     }
-
 
 def _record_visit(s, emp: dict, source: str) -> dict:
     """Log one visit for field / ground crew staff.

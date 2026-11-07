@@ -244,15 +244,38 @@ class ExplicitIntentTests(CategoryTestCase):
         self.assertEqual(len(attendance.get_by_date(TODAY)), 1)
         self.assertIsNone(attendance.get_by_date(TODAY)[0]["check_out"])
 
-    def test_after_checking_out_both_choices_are_duplicates(self):
+    def test_multiple_sessions_are_kept_indefinitely(self):
         emp = add_employee("OF306", "Nina Bose", "office")
-        self._scan(emp, "check-in", "09:00:00")
+        first = self._scan(emp, "check-in", "09:00:00")
+        self.assertEqual(first["action"], "CHECK-IN")
         attendance.reset_buffer()
-        self._scan(emp, "check-out", "17:00:00")
-        for intent in ("check-in", "check-out"):
-            with self.assertRaises(attendance.AttendanceError) as ctx:
-                self._scan(emp, intent, "17:05:00")
-            self.assertEqual(ctx.exception.code, "duplicate_scan")
+        self.assertEqual(self._scan(emp, "check-out", "12:00:00")["action"], "CHECK-OUT")
+        attendance.reset_buffer()
+        second = self._scan(emp, "check-in", "13:00:00")
+        self.assertEqual(second["action"], "CHECK-IN")
+        attendance.reset_buffer()
+        final = self._scan(emp, "check-out", "17:00:00")
+        self.assertEqual(final["action"], "CHECK-OUT")
+        sessions = final["attendance"]["sessions"]
+        self.assertEqual(len(sessions), 2)
+        self.assertEqual(sessions[0]["check_in"], "09:00:00")
+        self.assertEqual(sessions[0]["check_out"], "12:00:00")
+        self.assertEqual(sessions[1]["check_in"], "13:00:00")
+        self.assertEqual(sessions[1]["check_out"], "17:00:00")
+        self.assertEqual(final["attendance"]["hours"], 7.0)
+        self.assertEqual(final["attendance"]["hours_fmt"], "7h 00m")
+
+    def test_scan_prompt_suggests_action_without_recording(self):
+        emp = add_employee("OF307", "Omar Reed", "office")
+        with patch.object(db, "today_str", return_value=TODAY):
+            prompt = attendance.scan_prompt(emp)
+        self.assertEqual(prompt["action"], "DETECTED")
+        self.assertEqual(prompt["suggested_action"], "check-in")
+        self.assertEqual(attendance.get_by_date(TODAY), [])
+        self._scan(emp, "check-in", "09:00:00")
+        with patch.object(db, "today_str", return_value=TODAY):
+            prompt = attendance.scan_prompt(emp)
+        self.assertEqual(prompt["suggested_action"], "check-out")
 
     def test_field_staff_log_visits_with_check_in_and_cannot_check_out(self):
         emp = add_employee("FLD301", "Omar Khan", "field")
