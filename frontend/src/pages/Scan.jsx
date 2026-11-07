@@ -24,6 +24,7 @@ const star = () => new Date().toLocaleTimeString('en-IN', { hour: '2-digit', min
 const IDLE_SLEEP_MS = 30 * 1000
 
 export default function Scan() {
+  const [scanning, setScanning] = useState(true)
   const [asleep, setAsleep] = useState(false)
   const [camError, setCamError] = useState(null)
   const [last, setLast] = useState(null)
@@ -216,23 +217,29 @@ export default function Scan() {
           <h1>Face <b>Scan</b></h1>
           <div className="sub">Automatic face detection is active. Stand in front of the camera and hold still — check-in and check-out are handled automatically.</div>
         </div>
+        <label className="row" style={{ gap: '0.5rem', cursor: 'pointer' }}>
+          <input type="checkbox" checked={scanning} onChange={(e) => setScanning(e.target.checked)} />
+          <span className="mono" style={{ fontSize: '0.7rem', letterSpacing: '0.14em', color: 'var(--muted)' }}>
+            AUTO-SCAN
+          </span>
+        </label>
       </div>
 
       <div className="scan-grid">
         <div className="cam-col">
           <CameraCapture
             ref={camRef}
-            active
-            watch={asleep}
+            active={scanning || asleep}
+            watch={scanning || asleep}
             motionThreshold={0.05}
             onMotion={onMotion}
             onError={setCamError}
-            onBurst={runScan}
+            onBurst={scanning ? runScan : undefined}
             burst={3}
           />
           <div className="cam-caption">
-            <span>AUTOMATIC DETECTION — HOLD STILL</span>
-            <span className="mono">CAM 01 · LIVE</span>
+            <span>{scanning ? 'AUTOMATIC DETECTION — HOLD STILL' : 'AUTO-SCAN PAUSED'}</span>
+            <span className="mono">{scanning ? 'CAM 01 · LIVE' : 'CAM 01 · PAUSED'}</span>
           </div>
 
           {phoneAllowed && (
