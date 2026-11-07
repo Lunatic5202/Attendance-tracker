@@ -166,7 +166,7 @@ class FaceRoutesTests(unittest.TestCase):
         ):
             res = self.client.post("/api/attendance/scan", json={"images": [_frame_b64()]})
         self.assertEqual(res.status_code, 200)
-        self.assertEqual(res.json()["action"], "UNKNOWN")
+        self.assertEqual(res.json()["action"], "NO_FACE")
 
     def test_scan_match_requires_explicit_action_before_recording(self):
         reset_buffer()
