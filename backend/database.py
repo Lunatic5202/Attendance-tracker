@@ -267,6 +267,7 @@ def init_db() -> None:
             conn.execute(statement)
         _migrate_legacy_plaintext(conn)
         _migrate_add_category(conn)
+        _migrate_add_attendance_sessions(conn)
 
 
 def _has_column(conn, table: str, column: str) -> bool:
@@ -298,6 +299,14 @@ def _migrate_add_category(conn) -> None:
     if _has_column(conn, "employees", "category"):
         return
     conn.execute("ALTER TABLE employees ADD COLUMN category TEXT NOT NULL DEFAULT 'office'")
+
+
+
+def _migrate_add_attendance_sessions(conn) -> None:
+    """Add encrypted per-shift session history without rewriting legacy rows."""
+    if _has_column(conn, "attendance", "sessions"):
+        return
+    conn.execute("ALTER TABLE attendance ADD COLUMN sessions TEXT NOT NULL DEFAULT '[]'")
 
 
 def _migrate_legacy_plaintext(conn) -> None:
