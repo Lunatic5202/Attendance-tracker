@@ -244,11 +244,15 @@ Improvements that never touch stored templates:
 
 ### Phone-number fallback
 
-For anyone whose face will not scan, the kiosk has a **"Can't scan? Use your
-phone number"** panel under the camera. The person types the number on their
-profile; the kiosk takes a snapshot from the live camera; attendance is then
-recorded by the normal check-in / check-out rules (source `phone`) and the same
-welcome dialog appears.
+For anyone whose face will not scan, the Live Scan page has a large
+**"Can't scan? Press here to use your phone number"** button under the camera.
+It opens the dedicated **Phone Check-In** tab (`#/phone`, also in the sidebar).
+The tab is built for non-technical users: a big on-screen keypad, a large
+number display, and one big green **Check In / Check Out** button. The person
+types the number on their profile; the kiosk takes a snapshot from the live
+camera; attendance is then recorded by the normal check-in / check-out rules
+(source `phone`), a large welcome dialog appears, and the kiosk returns to the
+face scan on its own (also after 90 s of inactivity).
 
 A number is weaker proof than a face, so the fallback leaves a trail and is
 rate-limited on its own:

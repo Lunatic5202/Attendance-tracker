@@ -3,6 +3,7 @@ import { api } from './api'
 import Home from './pages/Home'
 import Dashboard from './pages/Dashboard'
 import Scan from './pages/Scan'
+import PhoneCheckin from './pages/PhoneCheckin'
 import Employees from './pages/Employees'
 import AttendancePage from './pages/AttendancePage'
 import AdminLogin from './components/AdminLogin'
@@ -10,11 +11,13 @@ import ErrorBoundary from './components/ErrorBoundary'
 import WakeUpGuard from './components/WakeUpGuard'
 import { Toasts, toast } from './components/Toast'
 
+// `public` tabs are the kiosk; the rest need an administrator session.
 const NAV = [
-  { to: 'dashboard', num: '01', label: 'Overview' },
-  { to: 'scan', num: '02', label: 'Live Scan' },
-  { to: 'employees', num: '03', label: 'Employees' },
-  { to: 'attendance', num: '04', label: 'Records' },
+  { to: 'dashboard', label: 'Overview' },
+  { to: 'scan', label: 'Live Scan', public: true },
+  { to: 'phone', label: 'Phone Check-In', public: true },
+  { to: 'employees', label: 'Employees' },
+  { to: 'attendance', label: 'Records' },
 ]
 
 function readRoute() {
@@ -75,6 +78,7 @@ export default function App() {
   let page
   if (route.startsWith('dashboard')) page = <Dashboard />
   else if (route.startsWith('scan') || route === 'home') page = <Scan admin={!!admin} />
+  else if (route.startsWith('phone')) page = <PhoneCheckin />
   else if (route.startsWith('employees')) page = <Employees />
   else if (route.startsWith('attendance')) page = <AttendancePage />
   else page = <Scan admin={!!admin} />
@@ -83,7 +87,7 @@ export default function App() {
     page = admin === null ? <div className="empty">Checking administrator session…</div> : admin ? page : <AdminLogin onLogin={() => setAdmin(true)} />
   }
 
-  const nav = admin ? NAV : NAV.filter((item) => item.to === 'scan')
+  const nav = admin ? NAV : NAV.filter((item) => item.public)
 
   return (
     <div className="app fade-in">
@@ -113,13 +117,13 @@ export default function App() {
         <aside className="sidebar">
           <span className="side-label">{admin ? 'Operations / Admin' : 'Kiosk / Employee Scan'}</span>
           <nav className="nav">
-            {nav.map((item) => (
+            {nav.map((item, i) => (
               <a
                 key={item.to}
                 className={`navlink ${route.startsWith(item.to) ? 'active' : ''}`}
                 href={`#/${item.to}`}
               >
-                <span className="num">{item.num}</span>
+                <span className="num">{String(i + 1).padStart(2, '0')}</span>
                 {item.label}
               </a>
             ))}
@@ -132,7 +136,7 @@ export default function App() {
               </>
             ) : (
               <>
-                kiosk <b>·</b> face scan only <br />
+                kiosk <b>·</b> face scan or phone number <br />
                 enrollment <b>·</b> admin-gated
               </>
             )}

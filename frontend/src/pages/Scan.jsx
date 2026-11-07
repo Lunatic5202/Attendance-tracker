@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { api, fmtTime } from '../api'
+import { navigate } from '../App'
 import CameraCapture from '../components/CameraCapture'
 import { toast } from '../components/Toast'
 
@@ -26,10 +27,6 @@ export default function Scan() {
   const [last, setLast] = useState(null)
   const [confirmation, setConfirmation] = useState(null)
   const [phoneAllowed, setPhoneAllowed] = useState(true)
-  const [phoneOpen, setPhoneOpen] = useState(false)
-  const [phone, setPhone] = useState('')
-  const [phoneBusy, setPhoneBusy] = useState(false)
-  const [phoneError, setPhoneError] = useState(null)
   const [log, setLog] = useState([
     { t: 'SYS', s: 'attendance relay online — awaiting camera frames…', tone: '' },
   ])
@@ -40,16 +37,10 @@ export default function Scan() {
   const logBox = useRef(null)
   const asleepRef = useRef(false)
   const lastActivity = useRef(Date.now())
-  const camRef = useRef(null)
-  const phoneOpenRef = useRef(false)
 
   useEffect(() => {
     asleepRef.current = asleep
   }, [asleep])
-
-  useEffect(() => {
-    phoneOpenRef.current = phoneOpen
-  }, [phoneOpen])
 
   // Hide the phone fallback when an administrator has switched it off.
   useEffect(() => {
@@ -67,7 +58,7 @@ export default function Scan() {
 
   useEffect(() => {
     const t = setInterval(() => {
-      if (asleepRef.current || phoneOpenRef.current) return
+      if (asleepRef.current) return
       if (Date.now() - lastActivity.current >= IDLE_SLEEP_MS) setAsleep(true)
     }, 3000)
     return () => clearInterval(t)
@@ -86,7 +77,7 @@ export default function Scan() {
     setLog((cur) => [...cur.slice(-29), { t, s, tone }])
 
   const runScan = useCallback(async (frames) => {
-    if (lock.current || asleepRef.current || confirmationRef.current || phoneOpenRef.current) return
+    if (lock.current || asleepRef.current || confirmationRef.current) return
     lock.current = true
     try {
       handleResult(await api.scan(frames, undefined))
@@ -148,44 +139,9 @@ export default function Scan() {
     }, 5200)
   }
 
+  // The phone-number fallback now lives on its own tab (#/phone).
   function openPhone() {
-    poke()
-    setAsleep(false)
-    setPhone('')
-    setPhoneError(null)
-    setPhoneOpen(true)
-  }
-
-  function closePhone() {
-    setPhoneOpen(false)
-    setPhone('')
-    setPhoneError(null)
-    poke()
-  }
-
-  async function submitPhone(e) {
-    e.preventDefault()
-    if (phoneBusy || confirmationRef.current) return
-    if (phone.replace(/\D/g, '').length < 6) {
-      setPhoneError('Enter the full phone number.')
-      return
-    }
-    poke()
-    setPhoneBusy(true)
-    setPhoneError(null)
-    // The snapshot is taken at the moment of submit, from the live camera.
-    const image = camRef.current?.capture() || null
-    let res
-    try {
-      res = await api.phoneCheckin(phone, image)
-    } catch (err) {
-      res = err.data && err.data.action ? err.data : { action: 'UNKNOWN', message: err.message }
-    } finally {
-      setPhoneBusy(false)
-    }
-    handleResult(res, { phone: true })
-    if (['CHECK-IN', 'CHECK-OUT', 'VISIT'].includes(res.action)) closePhone()
-    else setPhoneError(res.message || 'Could not check you in. Try again.')
+    navigate('phone')
   }
 
   function handleResult(res, opts = {}) {
@@ -263,56 +219,28 @@ export default function Scan() {
       <div className="scan-grid">
         <div className="cam-col">
           <CameraCapture
-            ref={camRef}
-            active={scanning || asleep || phoneOpen}
+            active={scanning || asleep}
             watch={scanning || asleep}
             motionThreshold={0.05}
             onMotion={onMotion}
             onError={setCamError}
-            onBurst={phoneOpen ? undefined : runScan}
+            onBurst={runScan}
             burst={3}
           />
           <div className="cam-caption">
-            <span>{phoneOpen ? 'LOOK AT THE CAMERA — PHOTO ON SUBMIT' : 'TARGET FRAME — HOLD STILL'}</span>
-            <span className="mono">{scanning || phoneOpen ? 'CAM 01 · LIVE' : 'CAM 01 · PAUSED'}</span>
+            <span>TARGET FRAME — HOLD STILL</span>
+            <span className="mono">{scanning ? 'CAM 01 · LIVE' : 'CAM 01 · PAUSED'}</span>
           </div>
 
           {phoneAllowed && (
             <div className="phone-fallback">
-              {!phoneOpen ? (
-                <button type="button" className="phone-toggle" onClick={openPhone}>
-                  Can’t scan? Use your phone number
-                </button>
-              ) : (
-                <form className="phone-form" onSubmit={submitPhone}>
-                  <label htmlFor="phone-input">Registered phone number</label>
-                  <div className="phone-row">
-                    <input
-                      id="phone-input"
-                      className="input"
-                      type="tel"
-                      inputMode="numeric"
-                      autoComplete="off"
-                      autoFocus
-                      maxLength={20}
-                      placeholder="e.g. 98300 12345"
-                      value={phone}
-                      disabled={phoneBusy}
-                      onChange={(e) => {
-                        poke()
-                        setPhone(e.target.value)
-                        if (phoneError) setPhoneError(null)
-                      }}
-                    />
-                    <button className="btn" type="submit" disabled={phoneBusy || !phone.trim()}>
-                      {phoneBusy ? 'Checking…' : 'Check in'}
-                    </button>
-                  </div>
-                  {phoneError && <div className="phone-error" role="alert">{phoneError}</div>}
-                  <div className="phone-help mono">A snapshot is taken from the camera when you submit.</div>
-                  <button type="button" className="phone-cancel" onClick={closePhone}>← Back to face scan</button>
-                </form>
-              )}
+              <button type="button" className="phone-toggle big-action" onClick={openPhone}>
+                <span className="pt-icon" aria-hidden="true">☎</span>
+                <span className="pt-text">
+                  <b>Can’t scan?</b>
+                  <span>Press here to use your phone number</span>
+                </span>
+              </button>
             </div>
           )}
         </div>
