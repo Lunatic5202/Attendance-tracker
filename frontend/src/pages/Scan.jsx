@@ -7,6 +7,7 @@ import { toast } from '../components/Toast'
 const actions = {
   'CHECK-IN': { label: 'Check-In', cls: 'in', icon: '→' },
   DETECTED: { label: 'Employee Detected', cls: 'warn', icon: '◎' },
+  NO_FACE: { label: 'Ready for Next Person', cls: 'idle', icon: '◎' },
   'CHECK-OUT': { label: 'Check-Out', cls: 'out', icon: '→' },
   VISIT: { label: 'Visit Logged', cls: 'in', icon: '→' },
   UNKNOWN: { label: 'Unknown Face', cls: 'idle', icon: '?' },
@@ -41,6 +42,7 @@ export default function Scan() {
   const detectedRef = useRef(null)
   const pendingFramesRef = useRef(null)
   const blockedEmployeeRef = useRef(null)
+  const noFaceStreakRef = useRef(0)
   const confirmationTimer = useRef(null)
   const audioContextRef = useRef(null)
   const logBox = useRef(null)
@@ -101,8 +103,14 @@ export default function Scan() {
         setDetected(result)
         setLast({ action: 'DETECTED', employee: result.employee, message: result.message, time: star() })
       } else {
-        if (result.action === 'UNKNOWN') {
-          blockedEmployeeRef.current = null
+        if (result.action === 'DETECTED') noFaceStreakRef.current = 0
+        if (result.action === 'NO_FACE') {
+          noFaceStreakRef.current += 1
+          if (noFaceStreakRef.current >= 2) blockedEmployeeRef.current = null
+          detectedRef.current = null
+          pendingFramesRef.current = null
+          setDetected(null)
+        } else if (result.action === 'UNKNOWN' || result.action === 'LOW_QUALITY') {
           detectedRef.current = null
           pendingFramesRef.current = null
           setDetected(null)
@@ -111,8 +119,11 @@ export default function Scan() {
       }
     } catch (e) {
       const result = e.data || { action: 'UNKNOWN', message: e.message }
-      if (result.action === 'UNKNOWN') {
-        blockedEmployeeRef.current = null
+      if (result.action === 'NO_FACE') {
+        noFaceStreakRef.current += 1
+        if (noFaceStreakRef.current >= 2) blockedEmployeeRef.current = null
+      }
+      if (result.action === 'UNKNOWN' || result.action === 'LOW_QUALITY' || result.action === 'NO_FACE') {
         detectedRef.current = null
         pendingFramesRef.current = null
         setDetected(null)
@@ -132,6 +143,7 @@ export default function Scan() {
     try {
       const result = await api.scan(frames, undefined, action)
       blockedEmployeeRef.current = prompt.employee.id
+      noFaceStreakRef.current = 0
       detectedRef.current = null
       pendingFramesRef.current = null
       setDetected(null)
