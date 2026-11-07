@@ -113,6 +113,12 @@ def public_attendance(row: Any) -> dict:
     for session in sessions:
         session["check_in"] = decrypt_text(session.get("check_in"))
         session["check_out"] = decrypt_text(session.get("check_out"))
+    if not sessions and data.get("check_in"):
+        sessions = [{
+            "check_in": data["check_in"],
+            "check_out": data.get("check_out"),
+            "hours": float(data.get("hours") or 0),
+        }]
     data["sessions"] = sessions
     for field in ("name", "department", "role"):
         if field in data:
