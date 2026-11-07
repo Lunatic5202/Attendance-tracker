@@ -129,8 +129,9 @@ class FaceRoutesTests(unittest.TestCase):
             )
         single.assert_not_called()
         self.assertEqual(res.status_code, 200, res.text)
-        self.assertIn(res.json()["action"], ("CHECK-IN", "CHECK-OUT", "VISIT"))
+        self.assertEqual(res.json()["action"], "DETECTED")
         self.assertEqual(res.json()["employee"]["id"], emp_id)
+        self.assertEqual(store.attendance_by_employee(emp_id), [])
 
     def test_scan_low_quality_returns_an_actionable_message(self):
         self._enrolled_employee()
@@ -167,18 +168,26 @@ class FaceRoutesTests(unittest.TestCase):
         self.assertEqual(res.status_code, 200)
         self.assertEqual(res.json()["action"], "UNKNOWN")
 
-    def test_scan_match_records_attendance(self):
+    def test_scan_match_requires_explicit_action_before_recording(self):
         reset_buffer()
         emp_id, label = self._enrolled_employee()
+        frame = _frame_b64()
         with patch.object(
             engine,
             "examine",
             return_value=VERDICT("match", label=label, distance=0.1),
         ):
-            res = self.client.post("/api/attendance/scan", json={"images": [_frame_b64()]})
-        self.assertEqual(res.status_code, 200, res.text)
-        self.assertIn(res.json()["action"], ("CHECK-IN", "CHECK-OUT", "VISIT"))
-        self.assertEqual(res.json()["employee"]["id"], emp_id)
+            detected = self.client.post("/api/attendance/scan", json={"images": [frame]})
+            self.assertEqual(detected.status_code, 200, detected.text)
+            self.assertEqual(detected.json()["action"], "DETECTED")
+            self.assertEqual(store.attendance_by_employee(emp_id), [])
+            checked_in = self.client.post(
+                "/api/attendance/scan",
+                json={"images": [frame], "action": "check-in"},
+            )
+        self.assertEqual(checked_in.status_code, 200, checked_in.text)
+        self.assertEqual(checked_in.json()["action"], "CHECK-IN")
+        self.assertEqual(checked_in.json()["employee"]["id"], emp_id)
 
     def test_health_reports_the_active_detector(self):
         res = self.client.get("/api/health")
