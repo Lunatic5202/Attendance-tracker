@@ -557,8 +557,11 @@ def scan_attendance(body: ScanRequest, request: Request):
         raise HTTPException(503, "Face recognition is unavailable; public scanning is disabled.")
 
     try:
-        result = attendance.record_scan(employee_id, source="face", intent=body.action)
-        return result
+        # Recognition is deliberately separate from recording: the kiosk
+        # highlights the employee and waits for an explicit Check In / Check Out.
+        if body.action is None:
+            return attendance.scan_prompt(employee_id)
+        return attendance.record_scan(employee_id, source="face", intent=body.action)
     except AttendanceError as exc:
         return _attendance_error_response(exc)
 
