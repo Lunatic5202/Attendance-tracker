@@ -1075,3 +1075,43 @@ input[type="checkbox"] {
 .phone-note{margin:.2rem 0 .6rem;font-family:var(--font-mono);font-size:.62rem;letter-spacing:.12em;text-transform:uppercase;opacity:.7}
 .snap-link{margin-left:.45rem;font-family:var(--font-mono);font-size:.58rem;letter-spacing:.08em;text-transform:uppercase;color:var(--navy);text-decoration:underline}
 @media (max-width: 680px){.phone-row{flex-direction:column}.phone-row .btn{width:100%}}
+
+/* ---- Phone check-in tab: large, touch-first controls for non-technical users ---- */
+.big-action{min-height:76px;padding:1rem 1.6rem;font-size:1.25rem;font-weight:700;letter-spacing:.03em;border-radius:14px}
+.big-back{min-height:64px;padding:.8rem 1.4rem;font-size:1.05rem;font-weight:700;border-radius:14px}
+
+/* Button on the face-scan page that jumps to the phone tab */
+.phone-fallback .phone-toggle{display:flex;align-items:center;gap:1rem;width:100%;min-height:84px;padding:1rem 1.2rem;text-align:left;text-transform:none;letter-spacing:0;font-family:var(--font-display);font-size:1.2rem;color:var(--white);background:var(--navy);border:2px solid var(--navy);border-radius:14px;box-shadow:0 14px 28px -20px rgba(16,43,70,.8)}
+.phone-fallback .phone-toggle:hover{background:var(--navy-deep);border-color:var(--navy-deep)}
+.phone-fallback .phone-toggle:focus-visible,.key:focus-visible,.phone-display:focus-visible,.big-action:focus-visible,.big-back:focus-visible{outline:4px solid var(--bolt);outline-offset:3px}
+.pt-icon{flex:none;display:grid;place-items:center;width:54px;height:54px;border-radius:50%;background:rgba(255,255,255,.16);font-size:1.7rem}
+.pt-text{display:grid;gap:.15rem;line-height:1.25}
+.pt-text b{font-size:1.3rem}
+.pt-text span{font-size:1rem;opacity:.88}
+
+/* The phone tab itself */
+.phone-pad{display:grid;gap:1rem;align-content:start;padding:1.4rem}
+.phone-pad-label{font-family:var(--font-display);font-size:1.15rem;font-weight:700;color:var(--navy-deep)}
+.phone-display{width:100%;min-height:88px;padding:.6rem 1rem;text-align:center;font-family:var(--font-mono);font-size:2.4rem;font-weight:600;letter-spacing:.12em;color:var(--navy-deep);background:var(--white);border:3px solid var(--line-strong);border-radius:14px}
+.phone-display::placeholder{color:rgba(102,118,148,.5)}
+.phone-display:focus{border-color:var(--navy-light);box-shadow:0 0 0 5px rgba(43,102,130,.14);outline:none}
+.phone-error-big{padding:1rem 1.1rem;border:2px solid var(--danger);border-radius:12px;background:#fdecea;color:#8c2a18;font-size:1.15rem;font-weight:600;line-height:1.45}
+.keypad{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:.75rem}
+.key{min-height:84px;font-family:var(--font-display);font-size:2.1rem;font-weight:700;color:var(--navy-deep);background:var(--white);border:2px solid var(--line-strong);border-radius:14px;box-shadow:0 8px 16px -14px rgba(16,43,70,.7);cursor:pointer;touch-action:manipulation;user-select:none;transition:transform .12s var(--ease-out),background .12s var(--ease-out),border-color .12s var(--ease-out)}
+.key:hover:not(:disabled){background:var(--paper);border-color:var(--navy-light)}
+.key:active:not(:disabled){transform:scale(.96);background:var(--paper-deep)}
+.key:disabled{opacity:.45;cursor:not-allowed}
+.key-clear,.key-back{font-size:1.3rem;color:var(--bolt-dark);background:var(--paper)}
+.big-action.go{width:100%;min-height:92px;margin-top:.2rem;font-size:1.5rem;color:var(--white);background:var(--ok);border-color:var(--ok)}
+.big-action.go:hover:not(:disabled){background:#12603f;border-color:#12603f}
+.big-action.go:disabled{background:var(--muted);border-color:var(--muted);opacity:.6;cursor:not-allowed}
+.phone-pad .phone-help{font-size:.9rem;letter-spacing:.02em;text-align:center;line-height:1.5}
+.phone-off{display:grid;gap:1rem;justify-items:start;padding:1.6rem;font-size:1.15rem}
+.phone-off-title{font-size:1.5rem;font-weight:700;color:var(--navy-deep)}
+.confirmation-button.big-action{min-width:220px;min-height:72px}
+
+@media (max-width: 680px){
+  .phone-display{font-size:1.9rem;min-height:76px}
+  .key{min-height:78px;font-size:1.9rem}
+  .big-back{width:100%;margin-top:1rem}
+}
