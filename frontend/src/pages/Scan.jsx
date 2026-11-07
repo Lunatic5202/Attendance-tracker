@@ -96,6 +96,7 @@ export default function Scan() {
     try {
       const result = await api.scan(frames, undefined, undefined)
       if (result.action === 'DETECTED') {
+        noFaceStreakRef.current = 0
         const employeeId = result.employee?.id
         if (employeeId && blockedEmployeeRef.current === employeeId) return
         pendingFramesRef.current = frames
@@ -103,7 +104,6 @@ export default function Scan() {
         setDetected(result)
         setLast({ action: 'DETECTED', employee: result.employee, message: result.message, time: star() })
       } else {
-        if (result.action === 'DETECTED') noFaceStreakRef.current = 0
         if (result.action === 'NO_FACE') {
           noFaceStreakRef.current += 1
           if (noFaceStreakRef.current >= 2) blockedEmployeeRef.current = null
@@ -111,6 +111,7 @@ export default function Scan() {
           pendingFramesRef.current = null
           setDetected(null)
         } else if (result.action === 'UNKNOWN' || result.action === 'LOW_QUALITY') {
+          noFaceStreakRef.current = 0
           detectedRef.current = null
           pendingFramesRef.current = null
           setDetected(null)
@@ -124,6 +125,7 @@ export default function Scan() {
         if (noFaceStreakRef.current >= 2) blockedEmployeeRef.current = null
       }
       if (result.action === 'UNKNOWN' || result.action === 'LOW_QUALITY' || result.action === 'NO_FACE') {
+        if (result.action !== 'NO_FACE') noFaceStreakRef.current = 0
         detectedRef.current = null
         pendingFramesRef.current = null
         setDetected(null)
