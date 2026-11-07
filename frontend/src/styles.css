@@ -1345,3 +1345,9 @@ input[type="checkbox"] {
   .detected-panel { padding: .8rem; }
   .detected-panel .intent-btn { min-height: 68px; }
 }
+
+
+.session-list { display: grid; gap: .28rem; min-width: 128px; }
+.session-item { display: flex; align-items: center; gap: .35rem; white-space: nowrap; font-size: .68rem; }
+.session-item span:first-child { color: var(--navy); }
+.session-item span:last-child { font-weight: 700; color: var(--ok); }
