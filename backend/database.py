@@ -370,5 +370,29 @@ def now_str() -> str:
     return datetime.now(timezone.utc).strftime("%H:%M:%S")
 
 
+def _office_tz():
+    """Office timezone from ``OFFICE_TIMEZONE`` (e.g. ``Asia/Kolkata``), else None."""
+    name = os.getenv("OFFICE_TIMEZONE", "").strip()
+    if not name:
+        return None
+    try:
+        from zoneinfo import ZoneInfo
+
+        return ZoneInfo(name)
+    except Exception:  # unknown zone name: fall back to the old behaviour
+        return None
+
+
+def office_time_str(utc_hms: str) -> str:
+    """Convert a stored UTC ``HH:MM:SS`` to office-local time for the late rule."""
+    tz = _office_tz()
+    if tz is None:
+        return utc_hms
+    h, m, s = (int(x) for x in utc_hms.split(":"))
+    today = datetime.now(timezone.utc).replace(hour=h, minute=m, second=s, microsecond=0)
+    return today.astimezone(tz).strftime("%H:%M:%S")
+
+
 def today_str() -> str:
-    return datetime.now().strftime("%Y-%m-%d")
+    tz = _office_tz()
+    return (datetime.now(tz) if tz else datetime.now()).strftime("%Y-%m-%d")
