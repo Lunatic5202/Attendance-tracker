@@ -530,6 +530,8 @@ def scan_attendance(body: ScanRequest, request: Request):
         )
         if outcome["status"] == "low_quality":
             return JSONResponse({"action": "LOW_QUALITY", "message": outcome["reason"]})
+        if outcome["status"] == "no_face":
+            return JSONResponse({"action": "NO_FACE", "message": "No face is visible in the camera frame."})
         if outcome["status"] == "ambiguous":
             return JSONResponse(
                 {"action": "UNKNOWN", "message": "Match too close to call — hold still and try again."}
