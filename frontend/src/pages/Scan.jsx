@@ -6,6 +6,7 @@ import { toast } from '../components/Toast'
 
 const actions = {
   'CHECK-IN': { label: 'Check-In', cls: 'in', icon: '→' },
+  DETECTED: { label: 'Employee Detected', cls: 'warn', icon: '◎' },
   'CHECK-OUT': { label: 'Check-Out', cls: 'out', icon: '→' },
   VISIT: { label: 'Visit Logged', cls: 'in', icon: '→' },
   UNKNOWN: { label: 'Unknown Face', cls: 'idle', icon: '?' },
@@ -29,12 +30,17 @@ export default function Scan() {
   const [camError, setCamError] = useState(null)
   const [last, setLast] = useState(null)
   const [confirmation, setConfirmation] = useState(null)
+  const [detected, setDetected] = useState(null)
+  const [processing, setProcessing] = useState(false)
   const [phoneAllowed, setPhoneAllowed] = useState(true)
   const [log, setLog] = useState([
     { t: 'SYS', s: 'attendance relay online — awaiting camera frames…', tone: '' },
   ])
   const lock = useRef(false)
   const confirmationRef = useRef(null)
+  const detectedRef = useRef(null)
+  const pendingFramesRef = useRef(null)
+  const blockedEmployeeRef = useRef(null)
   const confirmationTimer = useRef(null)
   const audioContextRef = useRef(null)
   const logBox = useRef(null)
@@ -80,19 +86,71 @@ export default function Scan() {
   const pushLog = (t, s, tone = '') =>
     setLog((cur) => [...cur.slice(-29), { t, s, tone }])
 
-  // Automatically verify each three-frame burst from the live camera.
-  // The server infers check-in vs check-out from the employee's attendance state.
+  // Recognition only: hold the detected employee on screen until they choose an action.
+  // A completed employee stays blocked until the camera sees them leave the frame.
   const runScan = useCallback(async (frames) => {
     if (lock.current || asleepRef.current || confirmationRef.current || !frames?.length) return
     lock.current = true
     try {
-      handleResult(await api.scan(frames, undefined))
+      const result = await api.scan(frames, undefined, undefined)
+      if (result.action === 'DETECTED') {
+        const employeeId = result.employee?.id
+        if (employeeId && blockedEmployeeRef.current === employeeId) return
+        pendingFramesRef.current = frames
+        detectedRef.current = result
+        setDetected(result)
+        setLast({ action: 'DETECTED', employee: result.employee, message: result.message, time: star() })
+      } else {
+        if (result.action === 'UNKNOWN') {
+          blockedEmployeeRef.current = null
+          detectedRef.current = null
+          pendingFramesRef.current = null
+          setDetected(null)
+        }
+        handleResult(result)
+      }
     } catch (e) {
-      handleResult(e.data || { action: 'UNKNOWN', message: e.message })
+      const result = e.data || { action: 'UNKNOWN', message: e.message }
+      if (result.action === 'UNKNOWN') {
+        blockedEmployeeRef.current = null
+        detectedRef.current = null
+        pendingFramesRef.current = null
+        setDetected(null)
+      }
+      handleResult(result)
     } finally {
       lock.current = false
     }
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function chooseAction(action) {
+    const prompt = detectedRef.current
+    const frames = pendingFramesRef.current
+    if (lock.current || !prompt?.employee?.id || !frames?.length) return
+    lock.current = true
+    setProcessing(true)
+    try {
+      const result = await api.scan(frames, undefined, action)
+      blockedEmployeeRef.current = prompt.employee.id
+      detectedRef.current = null
+      pendingFramesRef.current = null
+      setDetected(null)
+      handleResult(result)
+    } catch (e) {
+      const result = e.data || { action: 'UNKNOWN', message: e.message }
+      handleResult(result)
+      if (result.action === 'ALREADY_CHECKED_IN') {
+        detectedRef.current = { ...prompt, suggested_action: 'check-out' }
+        setDetected(detectedRef.current)
+      } else if (result.action === 'NOT_CHECKED_IN') {
+        detectedRef.current = { ...prompt, suggested_action: 'check-in' }
+        setDetected(detectedRef.current)
+      }
+    } finally {
+      setProcessing(false)
+      lock.current = false
+    }
+  }
 
   function closeConfirmation() {
     clearTimeout(confirmationTimer.current)
@@ -215,7 +273,7 @@ export default function Scan() {
         <div>
           <span className="kicker plain">Kiosk // Live Attendance</span>
           <h1>Face <b>Scan</b></h1>
-          <div className="sub">Automatic face detection is active. Stand in front of the camera and hold still — check-in and check-out are handled automatically.</div>
+          <div className="sub">Stand in front of the camera. Once recognised, choose whether to check in or check out.</div>
         </div>
         <label className="row" style={{ gap: '0.5rem', cursor: 'pointer' }}>
           <input type="checkbox" checked={scanning} onChange={(e) => setScanning(e.target.checked)} />
@@ -238,7 +296,7 @@ export default function Scan() {
             burst={3}
           />
           <div className="cam-caption">
-            <span>{scanning ? 'AUTOMATIC DETECTION — HOLD STILL' : 'AUTO-SCAN PAUSED'}</span>
+            <span>{scanning ? 'FACE DETECTION — ACTION REQUIRED' : 'AUTO-SCAN PAUSED'}</span>
             <span className="mono">{scanning ? 'CAM 01 · LIVE' : 'CAM 01 · PAUSED'}</span>
           </div>
 
@@ -289,6 +347,35 @@ export default function Scan() {
               <div className="rc-note">{last.message}</div>
             )}
 
+            {detected && (
+              <div className="detected-panel" role="status" aria-live="polite">
+                <div className="detected-kicker"><span className="detected-pulse" /> FACE RECOGNISED</div>
+                <div className="detected-name">{detected.employee.name}</div>
+                <div className="detected-meta mono">{detected.employee.id} / {detected.employee.department} · {detected.employee.role || 'staff'}</div>
+                <p>{detected.employee.category === 'field' ? 'Confirm to log this visit.' : 'What would you like to do?'}</p>
+                <div className="intent-row">
+                  {detected.employee.category === 'field' ? (
+                    <button type="button" className="intent-btn in" disabled={processing} onClick={() => chooseAction('check-in')}>
+                      <span className="ib-label">{processing ? 'PROCESSING…' : 'LOG VISIT'}</span>
+                      <span className="ib-hint">Record arrival</span>
+                    </button>
+                  ) : (
+                    <>
+                      <button type="button" className="intent-btn in" disabled={processing} onClick={() => chooseAction('check-in')}>
+                        <span className="ib-label">{processing ? 'PLEASE WAIT…' : 'CHECK IN'}</span>
+                        <span className="ib-hint">Start a session</span>
+                      </button>
+                      <button type="button" className="intent-btn out" disabled={processing} onClick={() => chooseAction('check-out')}>
+                        <span className="ib-label">{processing ? 'PLEASE WAIT…' : 'CHECK OUT'}</span>
+                        <span className="ib-hint">End current session</span>
+                      </button>
+                    </>
+                  )}
+                </div>
+                <div className="detected-foot">Attendance is only recorded after a button is pressed.</div>
+              </div>
+            )}
+
             {last?.attendance && (
               <div className="rc-strip">
                 <div>
@@ -321,7 +408,7 @@ export default function Scan() {
       <div className="card tight kiosk-note" style={{ marginTop: '0.65rem' }}>
         <span className="series-tag">Secure kiosk</span>
         <span className="mono" style={{ fontSize: '0.66rem', color: 'var(--muted)', letterSpacing: '0.1em' }}>
-          Only administrator-enrolled faces can create attendance records. First scan checks you in; a later scan checks you out automatically.
+          Only administrator-enrolled faces can create attendance records. Choose Check In or Check Out after recognition. Repeat sessions are supported throughout the day.
         </span>
       </div>
 
@@ -343,10 +430,10 @@ export default function Scan() {
               {confirmation.late
                 ? `Your check-in was recorded at ${confirmation.time}. We marked this arrival as late.`
                 : confirmation.kind === 'check-in'
-                  ? `You’re checked in for today at ${confirmation.time}. Have a great day!`
+                  ? `Your check-in was recorded at ${confirmation.time}. Have a great day!`
                   : confirmation.kind === 'visit'
                     ? `Your visit was logged at ${confirmation.time}. Thanks for stopping by!`
-                    : `You’re checked out at ${confirmation.time}. You worked ${confirmation.hours}. See you next time!`}
+                    : `Your check-out was recorded at ${confirmation.time}. This session lasted ${confirmation.hours}. See you next time!`}
             </p>
             {confirmation.phone && <div className="phone-note">Verified with your phone number</div>}
             {confirmation.late && <div className="late-note"><span className="late-spark">✦</span> Late arrival recorded — no further action needed.</div>}
