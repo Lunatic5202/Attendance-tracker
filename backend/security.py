@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import json
 import os
 import secrets
 import time
@@ -105,6 +106,14 @@ def public_attendance(row: Any) -> dict:
     data = dict(row)
     for field in ("check_in", "check_out", "created_at"):
         data[field] = decrypt_text(data.get(field))
+    try:
+        sessions = json.loads(data.get("sessions") or "[]")
+    except (TypeError, ValueError):
+        sessions = []
+    for session in sessions:
+        session["check_in"] = decrypt_text(session.get("check_in"))
+        session["check_out"] = decrypt_text(session.get("check_out"))
+    data["sessions"] = sessions
     for field in ("name", "department", "role"):
         if field in data:
             data[field] = decrypt_text(data.get(field)) or ""
