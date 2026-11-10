@@ -91,7 +91,7 @@ class EmployeeCreate(BaseModel):
     department: str = "General"
     role: str = ""
     email: str = ""
-    phone: str = ""
+    phone: str = Field(default="", max_length=32)
     category: str = "office"
     face_image: str | None = Field(None, max_length=4_000_000)  # base64 (data URL or raw)
 
@@ -101,7 +101,7 @@ class EmployeeUpdate(BaseModel):
     department: str | None = None
     role: str | None = None
     email: str | None = None
-    phone: str | None = None
+    phone: str = Field(default="", max_length=32)
     category: str | None = None
     is_active: bool | None = None
 
@@ -333,6 +333,8 @@ def update_employee(employee_id: str, body: EmployeeUpdate, _: bool = Depends(re
     sets = {}
     for key, value in fields.items():
         if key in {"name", "department", "role", "email", "phone"}:
+            if key == "phone":
+                value = value.strip()
             value = security.encrypt_text(value)
         elif key == "category":
             value = attendance.normalise_category(value)
