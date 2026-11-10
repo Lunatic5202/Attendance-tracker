@@ -207,11 +207,67 @@ function AddModal({ onClose, onCreated }) {
   )
 }
 
+function PhoneModal({ employee, onClose, onSaved }) {
+  const [phone, setPhone] = useState(employee.phone || '')
+  const [busy, setBusy] = useState(false)
+
+  async function submit() {
+    if (phone.length > 32) return toast('Phone number must be 32 characters or fewer')
+    setBusy(true)
+    try {
+      await api.updateEmployee(employee.id, { phone: phone.trim() })
+      toast(phone.trim() ? `Phone number updated for ${employee.name}` : `Phone number cleared for ${employee.name}`, { ok: true })
+      onSaved()
+      onClose()
+    } catch (e) {
+      toast(e.message || 'Could not update phone number')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+      <div className="modal">
+        <div className="mhead">
+          <h3>Phone Number · {employee.id}</h3>
+          <button className="x-btn" onClick={onClose}>✕</button>
+        </div>
+        <div className="mbody">
+          <div className="row" style={{ justifyContent: 'space-between', marginBottom: '0.9rem' }}>
+            <span className="mono" style={{ fontWeight: 700, color: 'var(--navy-deep)' }}>{employee.name}</span>
+            <span className="badge plain">{employee.department}</span>
+          </div>
+          <div className="field" style={{ marginBottom: 0 }}>
+            <label>Phone Number</label>
+            <input
+              className="input"
+              type="tel"
+              inputMode="tel"
+              autoComplete="tel"
+              maxLength={32}
+              value={phone}
+              onChange={(e) => setPhone(e.target.value)}
+              placeholder="+91 98765 43210"
+            />
+            <span className="muted-cell">Include the country code if needed. Leave blank to remove the number.</span>
+          </div>
+        </div>
+        <div className="mfoot">
+          <button className="btn ghost" onClick={onClose}>Cancel</button>
+          <button className="btn" onClick={submit} disabled={busy}>{busy ? 'Saving…' : 'Save Phone Number'}</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function Employees() {
   const [list, setList] = useState([])
   const [q, setQ] = useState('')
   const [showAdd, setShowAdd] = useState(false)
   const [enrolling, setEnrolling] = useState(null)
+  const [editingPhone, setEditingPhone] = useState(null)
   const [confirmDel, setConfirmDel] = useState(null)
 
   const load = () => api.employees().then(setList).catch(() => setList([]))
@@ -219,7 +275,7 @@ export default function Employees() {
 
   const filtered = list.filter((e) => {
     const needle = q.toLowerCase()
-    return !needle || e.name.toLowerCase().includes(needle) || e.id.toLowerCase().includes(needle)
+    return !needle || e.name.toLowerCase().includes(needle) || e.id.toLowerCase().includes(needle) || (e.phone || '').toLowerCase().includes(needle)
   })
 
   async function toggleActive(e, id) {
@@ -256,7 +312,7 @@ export default function Employees() {
           className="input"
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          placeholder="Search by name or id…"
+          placeholder="Search by name, id or phone…"
           style={{ width: 'min(320px, 100%)' }}
         />
         <div className="spacer" />
@@ -275,6 +331,7 @@ export default function Employees() {
                 <th>Type</th>
                 <th>Department</th>
                 <th>Role</th>
+                <th>Phone</th>
                 <th>Face</th>
                 <th>Status</th>
                 <th style={{ textAlign: 'right' }}>Actions</th>
@@ -295,6 +352,7 @@ export default function Employees() {
                   </td>
                   <td className="muted-cell">{e.department}</td>
                   <td className="muted-cell">{e.role || '—'}</td>
+                  <td className="mono">{e.phone || '—'}</td>
                   <td>
                     <span className={`badge ${e.face_enrolled ? 'ok' : 'danger'}`}>
                       {e.face_enrolled ? 'Enrolled' : 'No Face'}
@@ -312,6 +370,7 @@ export default function Employees() {
                           {e.face_samples ?? '?'} {e.face_samples === 1 ? 'sample' : 'samples'}
                         </span>
                       )}
+                      <button className="btn sm ghost" onClick={() => setEditingPhone(e)}>Edit Phone</button>
                       <button className="btn sm ghost" onClick={() => setEnrolling(e)}>
                         {e.face_enrolled ? 'Update Face' : 'Enroll'}
                       </button>
@@ -330,6 +389,7 @@ export default function Employees() {
 
       {showAdd && <AddModal onClose={() => setShowAdd(false)} onCreated={load} />}
       {enrolling && <EnrollModal employee={enrolling} onClose={() => setEnrolling(null)} onDone={load} />}
+      {editingPhone && <PhoneModal employee={editingPhone} onClose={() => setEditingPhone(null)} onSaved={load} />}
       {confirmDel && (
         <div className="modal-backdrop" onMouseDown={(e) => e.target === e.currentTarget && setConfirmDel(null)}>
           <div className="modal">
